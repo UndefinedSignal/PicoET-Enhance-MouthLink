@@ -1,6 +1,6 @@
 id=picoet-enhance
 name=PicoET-Enhance + MouthLink
-version=2.4.2-ml1
-versionCode=21
+version=2.4.2-ml2
+versionCode=22
 author=PicoFacialBridge
 description=Runtime eye-tracking enhancement plus optional MouthLink RAW lower-face camera frames (GRAY8/GRAY16LE, ROI, UDP 9040). MouthLink is off by default and starts only after SUBSCRIBE. Ships no PICO bytes, writes no system file and no persistent property. Commands: picoet.sh dual | off | toggle | mouthlink-on | mouthlink-off | status.

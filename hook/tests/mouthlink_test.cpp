@@ -111,6 +111,20 @@ struct Frame {
     uint64_t source = 0;
     std::vector<unsigned char> payload;
 };
+// Counts single-fragment frames delivered for a synthetic camera ticking at
+// period_ns (slightly faster than 90 Hz, as on the PICO 4 Pro mouth camera).
+size_t count_rate(uint16_t reply_port, uint8_t fps, const TestMat& mat, uint64_t base,
+                  uint64_t period_ns, size_t frames) {
+    subscribe(reply_port, fps);
+    size_t got = 0;
+    for (size_t i = 0; i < frames; ++i) {
+        mouthlink::offer(&mat.mat, base + i * period_ns);
+        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        while (!receive(0).empty()) ++got;
+    }
+    while (!receive(100).empty()) ++got;
+    return got;
+}
 Frame receive_frame(size_t expected_fragments) {
     Frame frame;
     size_t received = 0;
@@ -214,6 +228,21 @@ int main() {
     mouthlink::offer(&large.mat, 3000);
     const auto fragmented = receive_frame(3);
     check(fragmented.payload == large_pixels, "1400-byte fragmentation/reassembly");
+
+    // fps gate: camera period 11.111 ms (a hair under 1/90 s).
+    const uint64_t cam = 11111000ULL;
+    const size_t n = 90;
+    size_t got90 = count_rate(reply_port, 90, gray8, 1000000000ULL, cam, n);
+    size_t got0 = count_rate(reply_port, 0, gray8, 2000000000ULL, cam, n);
+    size_t got60 = count_rate(reply_port, 60, gray8, 3000000000ULL, cam, n);
+    size_t got45 = count_rate(reply_port, 45, gray8, 4000000000ULL, cam, n);
+    size_t got30 = count_rate(reply_port, 30, gray8, 5000000000ULL, cam, n);
+    std::fprintf(stderr, "fps gate: 90->%zu 0->%zu 60->%zu 45->%zu 30->%zu of %zu\n",
+                 got90, got0, got60, got45, got30, n);
+    check(got90 == n && got0 == n, "fps 90/0 must pass every camera frame");
+    check(got60 >= 58 && got60 <= 62, "fps 60 must pass ~2/3 of 90 Hz frames");
+    check(got45 >= 44 && got45 <= 46, "fps 45 must pass every other frame");
+    check(got30 >= 29 && got30 <= 31, "fps 30 must pass every third frame");
 
     send_control({0x03, 0x01});
     std::this_thread::sleep_for(std::chrono::milliseconds(30));

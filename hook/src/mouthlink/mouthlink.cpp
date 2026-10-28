@@ -315,10 +315,20 @@ class Sender {
             // restarting the service. Do not let the old FPS deadline mute it.
             next_source_ns_ = 0;
         }
-        if (target_fps_ && slot.source_ns) {
-            if (next_source_ns_ && slot.source_ns < next_source_ns_) return;
+        // fps >= 90 is the camera ceiling: no gating, every distinct frame is sent.
+        // Below that, keep a fixed source-clock grid with a quarter-period slack.
+        // Without slack a camera ticking a few ns faster than 1/fps misses every
+        // deadline by a hair and the effective rate halves (90 -> 45, 60 -> 45).
+        if (target_fps_ && target_fps_ < 90 && slot.source_ns) {
             const uint64_t period = 1000000000ULL / target_fps_;
-            next_source_ns_ = slot.source_ns + period;
+            const uint64_t slack = period / 4;
+            if (next_source_ns_ && slot.source_ns + slack < next_source_ns_) return;
+            // Advance the grid; resynchronise after a gap (headset off, pause)
+            // instead of bursting to catch up.
+            if (!next_source_ns_ || slot.source_ns >= next_source_ns_ + period)
+                next_source_ns_ = slot.source_ns + period;
+            else
+                next_source_ns_ += period;
         }
         uint16_t x = 0, y = 0, width = slot.width, height = slot.height;
         if (roi_w_ && roi_h_ && roi_x_ < slot.width && roi_y_ < slot.height &&
