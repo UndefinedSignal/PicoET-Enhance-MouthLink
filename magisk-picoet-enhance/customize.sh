@@ -39,6 +39,7 @@ fi
 ui_print "- PicoET-Enhance (runtime ptrace injection; no PICO bytes, no system writes)"
 ui_print "- Fresh-install default: dual/on; upgrades keep off as off/off, otherwise use dual/on."
 ui_print "- Enhanced eye/mouth defaults: 90/90 Hz."
+ui_print "- Optional MouthLink RAW mouth-camera source: off by default (UDP 9040)."
 ui_print "- Saved state: mode=$mode"
 ui_print "- ro.pxr.externalfunc is never touched."
 ui_print "- Switch (root, restarts eye/face tracking):"

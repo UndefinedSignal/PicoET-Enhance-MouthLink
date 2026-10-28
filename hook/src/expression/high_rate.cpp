@@ -1,6 +1,7 @@
 // Source-clock dual-rate dispatch and same-frame stock mouth worker, without profiling.
 #include "high_rate.h"
 #include "integration.h"
+#include "mouthlink/mouthlink.h"
 
 #include <cmath>
 #include <cstring>
@@ -238,6 +239,10 @@ void configure(uintptr_t base, Trackor stock, Infer observed, Infer native, Resi
 }
 Output dispatch(void* owner, const Mat* eye0, const Mat* eye1, const Mat* mouth,
                 const uint64_t sources[3]) {
+    // This is the already-paired lower-face camera input, before rate gating.
+    // MouthLink copies only while subscribed and uses the same source clock as
+    // the stock mouth output; no camera or inference state is changed here.
+    mouthlink::offer(mouth, sources[2]);
     OwnerState* state;
     {
         std::lock_guard<std::mutex> lock(owners_lock());

@@ -3,6 +3,7 @@
 #
 #   picoet.sh status
 #   picoet.sh off|dual|toggle    [--force]      (on is accepted as a synonym for dual)
+#   picoet.sh mouthlink-on|mouthlink-off [--force]  # RAW mouth camera, restart required
 #   picoet.sh ensure              # (internal) inject into the running service if needed
 #
 # The enhancement lives only in the eye-tracking service's memory: bin/picoet-inject
@@ -16,6 +17,8 @@
 #   /data/local/tmp/picoet-gate : off for normal mode, on for dual
 #   /data/local/tmp/picoet-eye-hz, picoet-mouth-hz : startup-only positive integer
 #       targets, capped at 90; defaults 90/90, mouth clamped to eye. Restart needed.
+#   /data/local/tmp/picoet-mouthlink : off|on (default off), MouthLink RAW source.
+#   /data/local/tmp/picoet-mouthlink-port : startup-only UDP control port, default 9040.
 
 # Magisk may invoke ./action.sh; the injector requires an absolute payload path.
 MODDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P) || exit 1
@@ -23,6 +26,8 @@ BIN=$MODDIR/bin/picoet-inject
 LIB=$MODDIR/lib/libpicoet_hook.so
 MODE_FILE=/data/local/tmp/picoet-mode
 GATE_FILE=/data/local/tmp/picoet-gate
+MOUTHLINK_FILE=/data/local/tmp/picoet-mouthlink
+MOUTHLINK_PORT_FILE=/data/local/tmp/picoet-mouthlink-port
 STATE_DIR=/data/adb/picoet-enhance
 RUNTIME_DIR=/data/local/tmp/picoet-runtime
 RECOVERY_USED=$STATE_DIR/recovery.used
@@ -47,6 +52,11 @@ sha() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 # Install/boot initializes dual/on; unexpected runtime mode reads still fail closed.
 saved_mode() { value=$("$BIN" --read-file "$MODE_FILE" 2>/dev/null); case "$value" in off|dual) echo "$value" ;; *) echo off ;; esac; }
 saved_gate() { value=$("$BIN" --read-file "$GATE_FILE" 2>/dev/null); case "$value" in on|off) echo "$value" ;; *) echo on ;; esac; }
+saved_mouthlink() { value=$("$BIN" --read-file "$MOUTHLINK_FILE" 2>/dev/null); case "$value" in on|off) echo "$value" ;; *) echo off ;; esac; }
+mouthlink_port() {
+    value=$("$BIN" --read-file "$MOUTHLINK_PORT_FILE" 2>/dev/null)
+    case "$value" in ''|*[!0-9]*) echo 9040 ;; *) [ "$value" -ge 1 ] && [ "$value" -le 65535 ] && echo "$value" || echo 9040 ;; esac
+}
 clients() { dumpsys -t 1 "$SERVICE" 2>/dev/null | grep -E 'There is [1-9][0-9]* clients'; }
 service_pid() {
     p=$(pidof "$SERVICE")
@@ -390,8 +400,8 @@ restart_and_inject() {
 
 MODE=$1
 case "$MODE" in
-    status|boot|ensure|off|dual|on|toggle) ;;
-    *) echo "usage: $0 status | off|dual|on|toggle [--force] | ensure"; exit 2 ;;
+    status|boot|ensure|off|dual|on|toggle|mouthlink-on|mouthlink-off) ;;
+    *) echo "usage: $0 status | off|dual|on|toggle [--force] | mouthlink-on|mouthlink-off [--force] | ensure"; exit 2 ;;
 esac
 # `on` is the companion-property spelling; normalize it to the saved `dual` mode.
 [ "$MODE" = on ] && MODE=dual
@@ -412,7 +422,7 @@ case "$MODE" in
         exit 0 ;;
     status)
         runtime_snapshot
-        echo "saved_mode=$(saved_mode) saved_gate=$(saved_gate) injected=$MAPPED service_pid=${RUN_PID:-none} phase=$PHASE applied_mode=$APPLIED_MODE applied_gate=$APPLIED_GATE effective_eye_hz=$EFFECTIVE_EYE_HZ effective_mouth_hz=$EFFECTIVE_MOUTH_HZ externalfunc=$(getprop ro.pxr.externalfunc)"
+        echo "saved_mode=$(saved_mode) saved_gate=$(saved_gate) injected=$MAPPED service_pid=${RUN_PID:-none} phase=$PHASE applied_mode=$APPLIED_MODE applied_gate=$APPLIED_GATE effective_eye_hz=$EFFECTIVE_EYE_HZ effective_mouth_hz=$EFFECTIVE_MOUTH_HZ mouthlink=$(saved_mouthlink) mouthlink_port=$(mouthlink_port) externalfunc=$(getprop ro.pxr.externalfunc)"
         [ -f "$BLOCKED" ] && echo "automatic_injection_blocked=$(cat "$BLOCKED")"
         if [ -f "$PLOG" ]; then
             echo "log_tail:"
@@ -423,7 +433,7 @@ case "$MODE" in
     ensure)
         inject_now
         exit $? ;;
-    off|dual|toggle)
+    off|dual|toggle|mouthlink-on|mouthlink-off)
         FORCE=0
         for a in "$@"; do
             [ "$a" = --force ] && FORCE=1
@@ -435,6 +445,20 @@ case "$MODE" in
                 [ -z "$(printf '%s\n' "$dump" | grep -E 'There is [1-9][0-9]* clients')" ] ||
                     die "tracking clients connected, restart would drop them; rerun with --force"
             fi
+        fi
+        if [ "$MODE" = mouthlink-on ] || [ "$MODE" = mouthlink-off ]; then
+            ML_SETTING=off
+            [ "$MODE" = mouthlink-on ] && ML_SETTING=on
+            if [ "$ML_SETTING" = on ] && [ "$(saved_mode)" != dual ]; then
+                die "MouthLink requires enhanced dual mode; run 'picoet.sh dual' first"
+            fi
+            log "switching MouthLink=$ML_SETTING control_port=$(mouthlink_port) (eye/face tracking restarts)"
+            "$BIN" --save-mouthlink "$ML_SETTING" || die "cannot save MouthLink setting"
+            acknowledge_unsafe
+            rm -f "$BLOCKED" "$RECOVERY_USED" "$AUTO_ATTEMPTS" "$AUTO_ATTEMPTS.tmp" || die "cannot reset recovery budget"
+            restart_and_inject || die "MouthLink application failed; see status/inject.log"
+            log "MouthLink=$ML_SETTING service pid ${old:-none} -> ${new:-none} phase=$PHASE"
+            exit 0
         fi
         if [ "$MODE" = toggle ]; then
             # Decide under the control lock from actual readiness. A failed

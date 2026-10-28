@@ -128,6 +128,33 @@ sh /data/adb/modules/picoet-enhance/picoet.sh status
 
 Rates set in 2.4.0 or later survive reinstalls and upgrades. Only the first migration from a version before 2.4.0 clears old overrides to start at 90/90. Normal mode (`off`) is fully stock regardless of these files.
 
+## Optional MouthLink RAW mouth-camera stream
+
+This fork adds an opt-in MouthLink source to the existing payload; it does not attach a second injector or open another camera client. The existing FaceTrackor dispatch supplies the already-paired lower-face `cv::Mat` and its original mouth source timestamp. One-channel `CV_8U` and `CV_16U` frames are copied with row padding removed and sent as uncompressed MouthLink `GRAY8` or `GRAY16LE`. Full frames and the subscription ROI are supported; fragments, CRC32, PING/PONG, DISCOVER/HELLO and the three-second subscription lease follow MouthLink protocol v1.
+
+MouthLink is disabled by default and no image is sent before `SUBSCRIBE`. It requires enhanced `dual` mode because capture uses the expression hook. Enabling or disabling it restarts tracking:
+
+```sh
+adb shell su -c 'sh /data/adb/modules/picoet-enhance/picoet.sh dual --force'
+adb shell su -c 'sh /data/adb/modules/picoet-enhance/picoet.sh mouthlink-on --force'
+adb shell su -c 'sh /data/adb/modules/picoet-enhance/picoet.sh status'
+```
+
+Then run `MouthLink.Receiver --host <headset-IP>` on the PC and open its viewer (by default `http://localhost:8080/`). Use `mouthlink-off --force` to disable the source. The control port defaults to UDP 9040 and can be changed only before service startup with `/data/local/tmp/picoet-mouthlink-port`.
+
+Network sending runs on a worker thread. The camera thread uses a non-blocking slot handoff and never waits for UDP; overload drops frames rather than delaying inference. Frames larger than 4 MiB, non-monochrome or other OpenCV depths are rejected. No JPEG/LZ4 conversion is performed. Raw images remain biometric data: use only a trusted LAN, do not expose the UDP ports to the internet, and do not commit recordings.
+
+The host-only synthetic transport test does not need Android or PICO libraries:
+
+```sh
+g++ -std=c++17 -O2 -Wall -Wextra -Werror -Ihook/src \
+  hook/src/mouthlink/mouthlink.cpp hook/tests/mouthlink_test.cpp \
+  -pthread -o /tmp/mouthlink_test
+/tmp/mouthlink_test
+```
+
+The firmware guards remain unchanged: this build targets the same PICO OS 5.13.7 library hashes as PicoET-Enhance 2.4.2. Do not flash it onto another firmware merely because an older PicoET build was injectable there; the matching source offsets and hashes must be ported first. Live-camera validation still has to establish the actual mouth resolution, depth, observed frame rate and end-to-end network loss.
+
 ## About the enterprise gate
 
 The firmware uses `PXR::EyeUtil::isBusinessDev()` to control per-eye output, including the real pupil diameter. This module makes the function return true inside the eye-tracking service. The device-wide enterprise-mode property `ro.pxr.externalfunc` keeps its existing value.

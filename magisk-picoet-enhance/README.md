@@ -1,4 +1,4 @@
-# PicoET-Enhance 2.4.2
+# PicoET-Enhance 2.4.2 + MouthLink ml1
 
 Eye-tracking enhancement for PICO 4 Pro running PICO OS 5.13.7 with Magisk.
 The installer checks the device's eye-tracking library hashes before installing.
@@ -66,6 +66,15 @@ than measured output rates. To return to 90/90, delete both files and run `dual`
 again. Rates set in 2.4.0 or later survive reinstalls and upgrades. Only the first
 migration from a version before 2.4.0 clears old overrides to start at 90/90.
 Normal mode (`off`) is fully stock.
+
+## Optional MouthLink RAW source
+
+MouthLink is off by default. In enhanced `dual` mode, `mouthlink-on --force` restarts tracking and enables the lower-face camera source on UDP 9040; `mouthlink-off --force` disables it. No frame is sent until a PC subscribes. The stream carries uncompressed GRAY8/GRAY16LE with the original mouth source timestamp and supports the MouthLink ROI. Use only on a trusted LAN. This does not change the eye/face expression protocol or PicoFacialBridge.
+
+```sh
+sh /data/adb/modules/picoet-enhance/picoet.sh mouthlink-on --force
+sh /data/adb/modules/picoet-enhance/picoet.sh mouthlink-off --force
+```
 
 ## Status and troubleshooting
 

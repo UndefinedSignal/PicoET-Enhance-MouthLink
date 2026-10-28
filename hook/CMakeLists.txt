@@ -42,12 +42,14 @@ add_library(picoet_obj OBJECT
     src/expression/integration.cpp
     src/expression/mouth.cpp
     src/expression/numerical.cpp
-    src/expression/state.cpp)
+    src/expression/state.cpp
+    src/mouthlink/mouthlink.cpp)
 set_target_properties(picoet_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(picoet_obj PRIVATE
     -std=c++17 -O2 -fPIC -fexceptions -fvisibility=hidden -Wall -Wextra
     -fno-omit-frame-pointer -ffp-contract=off)
-target_include_directories(picoet_obj PRIVATE ${SH_DIR}/include)
+target_include_directories(picoet_obj PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src ${SH_DIR}/include)
 
 add_library(picoet_hook SHARED
     $<TARGET_OBJECTS:shadowhook_obj>

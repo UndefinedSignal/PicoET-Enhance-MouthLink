@@ -18,6 +18,7 @@
 #include "shadowhook.h"
 #include "expression/high_rate.h"
 #include "expression/integration.h"
+#include "mouthlink/mouthlink.h"
 #include "root_file.h"
 
 extern "C" {
@@ -37,6 +38,8 @@ constexpr const char kEyeModeFile[] = "/data/local/tmp/picoet-mode";
 constexpr const char kGateFile[] = "/data/local/tmp/picoet-gate";
 constexpr const char kEyeHzFile[] = "/data/local/tmp/picoet-eye-hz";
 constexpr const char kMouthHzFile[] = "/data/local/tmp/picoet-mouth-hz";
+constexpr const char kMouthLinkFile[] = "/data/local/tmp/picoet-mouthlink";
+constexpr const char kMouthLinkPortFile[] = "/data/local/tmp/picoet-mouthlink-port";
 constexpr const char kHookLog[] = "/data/local/tmp/picoet-hook.log";
 constexpr const char kPluginSoname[] = "libpxreyetracking.phoenix.so";
 constexpr uint64_t kPluginMinLoadBytes = 0x34279c;
@@ -69,6 +72,7 @@ void log_fmt(const char* fmt, ...)
     va_end(ap);
     append_log(buf);
 }
+void mouthlink_log(const char* message) { append_log(message); }
 template<class T> T load(const void* object, size_t offset)
 {
     T value;
@@ -166,6 +170,25 @@ uint64_t fnv1a64_mem(const unsigned char* p, size_t n)
     uint64_t h = 14695981039346656037ULL;
     for (size_t i = 0; i < n; i++) { h ^= p[i]; h *= 1099511628211ULL; }
     return h;
+}
+
+int read_mouthlink_enabled()
+{
+    int fd = picoet_open_root_file(kMouthLinkFile, O_RDONLY, 0);
+    if (fd < 0) return 0; // Opt-in: no listener and no frame copies by default.
+    char buf[16];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    for (ssize_t i = n - 1; i >= 0; i--) {
+        const char c = buf[i];
+        if (c == '\n' || c == '\r' || c == ' ' || c == '\t') buf[i] = '\0';
+        else break;
+    }
+    if (strcmp(buf, "on") == 0) return 1;
+    if (strcmp(buf, "off") != 0) log_fmt("MouthLink: unrecognized setting '%s'; disabled", buf);
+    return 0;
 }
 
 // ---- unchanged service-local P1 gate ---------------------------------------
@@ -787,6 +810,8 @@ void on_plugin_found(void* base)
     }
     if (__atomic_load_n(&picoet_gate_installed, __ATOMIC_ACQUIRE))
         __atomic_store_n(&picoet_dual_installed, 1, __ATOMIC_RELEASE);
+    // Optional and isolated: a bind/thread failure disables only RAW streaming.
+    mouthlink::start();
     report_runtime("ready");
 }
 void* plugin_poll_thread(void*)
@@ -816,6 +841,14 @@ __attribute__((constructor)) void picoet_init()
             "effective_eye_hz=%u effective_mouth_hz=%u mouth_clamped=%u",
             g_rates.requested_eye_hz, g_rates.requested_mouth_hz,
             g_rates.eye_hz, g_rates.mouth_hz, unsigned(g_rates.mouth_hz != mouth_hz));
+    uint32_t mouthlink_port = read_frequency(kMouthLinkPortFile, 9040);
+    if (mouthlink_port > 65535) {
+        log_fmt("MouthLink: invalid port %u; default=9040", mouthlink_port);
+        mouthlink_port = 9040;
+    }
+    const bool mouthlink_enabled = read_mouthlink_enabled() != 0;
+    mouthlink::configure(mouthlink_enabled, static_cast<uint16_t>(mouthlink_port), mouthlink_log);
+    log_fmt("MouthLink startup: enabled=%u control_port=%u", unsigned(mouthlink_enabled), mouthlink_port);
     if (publish_runtime("initializing") != 0) {
         append_log("runtime state unavailable; refusing all hooks (prepare picoet-runtime directory)");
         return;

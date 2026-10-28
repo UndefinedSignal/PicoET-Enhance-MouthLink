@@ -10,3 +10,12 @@ artifacts/
 *.tmp
 Thumbs.db
 .DS_Store
+
+# Local camera captures and derived biometric material
+/data/
+/runs/
+*.mlrec
+*.raw
+*.npy
+*.onnx
+*.pt
