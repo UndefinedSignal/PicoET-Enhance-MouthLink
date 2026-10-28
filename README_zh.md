@@ -1,6 +1,13 @@
-# PicoET-Enhance
+# PicoET-Enhance-MouthLink
 
 [English](README.md) | 简体中文
+
+> **本仓库是 [WolalaQAQ/PicoET-Enhance](https://github.com/WolalaQAQ/PicoET-Enhance) 的分支**
+> （`mouthlink` 分支，模块版本 `2.4.2-ml3`）：在上游 v2.4.2 基础上增加可选的 **MouthLink**
+> 嘴部摄像头数据流（400×400 红外，90 Hz，经 UDP 发送到 PC）以及逐帧原厂嘴部数值标签，
+> 用于训练自定义嘴部追踪模型。默认关闭；眼动追踪与原厂嘴部输出保持不变。
+> PC 端见 [MouthLink](https://github.com/UndefinedSignal/MouthLink)，详细说明见英文 README。
+> 以下内容为上游文档。MouthLink 相关问题请在本分支提交，而不是上游。
 
 面向 PICO 4 Pro 的眼动增强 Magisk 模块：打开眼动服务的逐眼门控以输出真实瞳孔数据，解除面部表情模型的跨眼耦合让左右眼各自计算，并把眼部与嘴部表情目标频率从原厂约 24 Hz 提高到默认 90/90 Hz。配合 [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) 和 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) 使用。
 

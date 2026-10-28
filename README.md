@@ -1,6 +1,22 @@
-# PicoET-Enhance
+# PicoET-Enhance-MouthLink
 
 English | [简体中文](README_zh.md)
+
+> **This is a fork of [WolalaQAQ/PicoET-Enhance](https://github.com/WolalaQAQ/PicoET-Enhance)**
+> (branch `mouthlink`, module version `2.4.2-ml3`): upstream v2.4.2 plus an opt-in
+> **MouthLink** source for custom mouth tracking.
+>
+> - Raw mouth-camera stream (400×400 IR, 90 Hz) to a PC over UDP, captured inside the
+>   existing payload — no second injector and no extra camera client.
+> - Optional per-frame stock mouth labels (network output, unsmoothed and smoothed
+>   values) carrying the same timestamp as the camera frame, for training a custom model.
+> - Disabled by default. Eye tracking and stock mouth output are unchanged.
+>
+> The PC side (receiver, recording, dataset builder, training) is
+> [MouthLink](https://github.com/UndefinedSignal/MouthLink). Details:
+> [Optional MouthLink RAW mouth-camera stream](#optional-mouthlink-raw-mouth-camera-stream).
+> The rest of this README is the upstream documentation. Please report MouthLink issues
+> in this fork, not upstream.
 
 An eye-tracking enhancement Magisk module for the PICO 4 Pro: it opens the eye-tracking service's per-eye gate for real pupil data, decouples the facial expression model so each eye is processed on its own, and targets 90 Hz for both eye and mouth expressions by default instead of the stock rate of about 24 Hz. Use it with [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) and [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule).
 
@@ -153,7 +169,17 @@ g++ -std=c++17 -O2 -Wall -Wextra -Werror -Ihook/src \
 /tmp/mouthlink_test
 ```
 
-The firmware guards remain unchanged: this build targets the same PICO OS 5.13.7 library hashes as PicoET-Enhance 2.4.2. Do not flash it onto another firmware merely because an older PicoET build was injectable there; the matching source offsets and hashes must be ported first. Live-camera validation still has to establish the actual mouth resolution, depth, observed frame rate and end-to-end network loss.
+The subscription frame-rate limit (`SUBSCRIBE` fps) sends every camera frame at 0 or ≥ 90; lower rates use a source-clock grid with a quarter-period slack, so a 90 Hz camera gives exactly 60, 45 or 30 fps (ml2).
+
+### STOCK labels (ml3)
+
+A subscriber that sets bit 0 of `SUBSCRIBE` byte 14 also receives one 424-byte `STOCK` datagram for every newly accepted mouth source. It carries the stock network output (35 values), the 33 mouth values after stock post-processing but before temporal smoothing, the 33 smoothed values that are exported to the bridge, and the valid / warm-up / quality state. Its timestamp equals the capture timestamp of the camera frame, so frames and labels pair exactly. Records are queued from the expression thread under `trylock` and sent by the MouthLink thread; tracking never waits, and the stock outputs themselves are not changed. `HELLO` is 9 bytes, with capability bit 0 = STOCK. Older subscribers that send a 14-byte `SUBSCRIBE` never receive STOCK.
+
+### Firmware and validation
+
+The firmware guards remain unchanged: this build targets the same library hashes as PicoET-Enhance 2.4.2 (PICO OS 5.13.7). It was validated on a PICO 4 Pro running PICO OS 5.13.3S, whose eye-tracking libraries are byte-identical (the installer's hash check passes). Do not flash it onto another firmware merely because an older PicoET build was injectable there; the matching source offsets and hashes must be ported first.
+
+Measured on that headset: mouth camera 400×400 GRAY8 at 90 fps, ≈118 Mbit/s uncompressed with ~20 ms latency next to Virtual Desktop; stock eye and mouth expressions stay at 90/90 Hz; STOCK labels paired with 100 % of received frames.
 
 ## About the enterprise gate
 
