@@ -168,6 +168,7 @@ float process(MouthState& state, const float raw35[kMouthRawChannels],
     postprocess(state, raw35, diagnostics.ratio, mouth);
     for (unsigned i = 0; i < kMouthChannels; ++i) {
         float value = clamp01(mouth[i]);
+        state.instant[i] = value;
         const unsigned slot = slots[i];
         if (!diagnostics.warmup) {
             if (slot == 51) value = tongue(state.previous[i], value, diagnostics.ratio);

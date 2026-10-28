@@ -1,4 +1,4 @@
-# PicoET-Enhance 2.4.2 + MouthLink ml2
+# PicoET-Enhance 2.4.2 + MouthLink ml3
 
 Eye-tracking enhancement for PICO 4 Pro running PICO OS 5.13.7 with Magisk.
 The installer checks the device's eye-tracking library hashes before installing.
@@ -75,6 +75,15 @@ MouthLink is off by default. In enhanced `dual` mode, `mouthlink-on --force` res
 sh /data/adb/modules/picoet-enhance/picoet.sh mouthlink-on --force
 sh /data/adb/modules/picoet-enhance/picoet.sh mouthlink-off --force
 ```
+
+ml2: the subscription fps limit no longer halves a 90 Hz camera (fps >= 90 is ungated;
+lower rates use a source-clock grid with quarter-period slack).
+
+ml3: optional STOCK labels. A subscriber that sets SUBSCRIBE byte 14 bit 0 also gets
+one 424-byte STOCK datagram per newly accepted mouth source: the stock raw35 network
+output, the post-processed but unsmoothed 33 mouth values, and the smoothed 33 values
+exported to the bridge, keyed by the same source timestamp as the camera frame. HELLO
+is 9 bytes with capability bit 0 = STOCK. Eye/face outputs are unchanged.
 
 ## Status and troubleshooting
 

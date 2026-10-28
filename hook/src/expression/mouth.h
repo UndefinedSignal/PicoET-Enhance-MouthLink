@@ -19,6 +19,9 @@ struct MouthDiagnostics {
 struct MouthState {
     float baseline[32] {};
     float previous[kMouthChannels] {};
+    // Diagnostic copy for MouthLink: post-processed, clamped values of the latest
+    // accepted source BEFORE temporal smoothing (mouth33 order). Never fed back.
+    float instant[kMouthChannels] {};
     uint64_t first_source_ns = 0, last_source_ns = 0;
     uint32_t window_samples = 30, threshold_samples = 15;
     QualityTimeWindow quality;

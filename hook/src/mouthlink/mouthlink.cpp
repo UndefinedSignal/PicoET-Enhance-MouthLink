@@ -26,6 +26,18 @@ constexpr uint32_t kSubscribeLeaseMs = 3000;
 constexpr uint8_t kVersion = 1;
 constexpr uint8_t kFragment = 0x01, kSubscribe = 0x02, kUnsubscribe = 0x03;
 constexpr uint8_t kPing = 0x04, kPong = 0x05, kDiscover = 0x06, kHello = 0x07;
+constexpr uint8_t kStock = 0x08;
+// SUBSCRIBE byte 14 (optional, datagram >= 15 bytes): bit 0 = also send STOCK.
+constexpr uint8_t kSubscribeWantStock = 0x01;
+// HELLO byte 8 (9-byte HELLO): capabilities, bit 0 = STOCK supported.
+constexpr uint8_t kCapStock = 0x01;
+// STOCK v1, 424 bytes, little-endian:
+//   0 type 0x08 | 1 version 1 | 2 flags (bit0 valid, bit1 warmup) | 3 int8 class
+//   4 u32 seq | 8 u64 source_ns (== FRAGMENT capture timestamp of the same frame)
+//   16 f32 raw[35] | 156 f32 instant[33] | 288 f32 final[33] | 420 u32 CRC32(0..419)
+constexpr size_t kStockRaw = 35, kStockMouth = 33;
+constexpr size_t kStockSize = 424;
+constexpr size_t kStockQueue = 32;
 constexpr uint8_t kGray8 = 0x01, kGray16Le = 0x02;
 
 bool configured_enabled = false;
@@ -115,6 +127,15 @@ bool inspect_mat(const expression_high_rate::Mat* mat, FrameView& view) {
     return true;
 }
 
+struct StockRecord {
+    uint64_t source_ns = 0;
+    float raw[kStockRaw] {};
+    float instant[kStockMouth] {};
+    float final_values[kStockMouth] {};
+    uint8_t flags = 0;
+    int8_t classification = -1;
+};
+
 class Sender {
     enum SlotState : unsigned char { Free, Ready, Sending };
     struct Slot {
@@ -141,6 +162,15 @@ class Sender {
     std::atomic<uint8_t> native_format {0};
     std::atomic<uint64_t> last_copied_source {0};
     std::atomic<uint64_t> copied_frames {0}, copy_drops {0};
+
+    // STOCK queue: expression thread pushes under trylock, sender drains.
+    pthread_mutex_t stock_mutex_ = PTHREAD_MUTEX_INITIALIZER;
+    StockRecord stock_queue_[kStockQueue];
+    size_t stock_head_ = 0, stock_count_ = 0;
+    std::atomic<bool> stock_requested {false};
+    std::atomic<uint64_t> stock_queued {0}, stock_queue_drops {0};
+    uint32_t stock_seq_ = 0;
+    uint64_t stock_sent_ = 0, stock_send_drops_ = 0;
 
     sockaddr_in subscriber_ {};
     bool subscribed_ = false;
@@ -185,6 +215,7 @@ class Sender {
         if (!subscribed_) return;
         subscribed_ = false;
         stream_requested.store(false, std::memory_order_release);
+        stock_requested.store(false, std::memory_order_release);
         next_source_ns_ = 0;
         log("MouthLink: stream stopped (%s)", reason);
     }
@@ -207,15 +238,21 @@ class Sender {
         roi_h_ = load<uint16_t>(data, 12);
         lease_until_ms_ = monotonic_ms() + kSubscribeLeaseMs;
         next_source_ns_ = 0;
+        const bool want_stock = size >= 15 && (data[14] & kSubscribeWantStock);
+        const bool stock_changed = want_stock != stock_requested.load(std::memory_order_acquire);
         const bool was_subscribed = subscribed_;
         subscribed_ = true;
         stream_requested.store(true, std::memory_order_release);
+        stock_requested.store(want_stock, std::memory_order_release);
+        if (stock_changed && was_subscribed)
+            log("MouthLink: STOCK %s", want_stock ? "requested" : "no longer requested");
         if (!was_subscribed) {
             char address[INET_ADDRSTRLEN] = "?";
             inet_ntop(AF_INET, &from.sin_addr, address, sizeof(address));
-            log("MouthLink: SUBSCRIBE %s:%u fps=%u fmt_req=0x%02x ROI=%u,%u %ux%u",
+            log("MouthLink: SUBSCRIBE %s:%u fps=%u fmt_req=0x%02x ROI=%u,%u %ux%u stock=%u",
                 address, unsigned(reply_port), unsigned(target_fps_), unsigned(requested_format_),
-                unsigned(roi_x_), unsigned(roi_y_), unsigned(roi_w_), unsigned(roi_h_));
+                unsigned(roi_x_), unsigned(roi_y_), unsigned(roi_w_), unsigned(roi_h_),
+                unsigned(want_stock));
         }
     }
     void handle_control() {
@@ -251,7 +288,7 @@ class Sender {
                 break;
             case kDiscover:
             {
-                unsigned char hello[8] {};
+                unsigned char hello[9] {};
                 hello[0] = kHello;
                 hello[1] = kVersion;
                 const uint64_t last = last_valid_ms.load(std::memory_order_acquire);
@@ -261,6 +298,7 @@ class Sender {
                 const uint32_t dimensions = native_size.load(std::memory_order_acquire);
                 store<uint16_t>(hello, 4, uint16_t(dimensions >> 16));
                 store<uint16_t>(hello, 6, uint16_t(dimensions));
+                hello[8] = kCapStock;
                 send(hello, sizeof(hello), from);
                 break;
             }
@@ -386,14 +424,47 @@ class Sender {
         last_sent_source_ns_ = slot.source_ns;
         have_sent_source_ = true;
     }
+    // Drains queued STOCK records. Records are copied out under the lock, sent outside it.
+    void send_stock() {
+        StockRecord batch[kStockQueue];
+        size_t n = 0;
+        pthread_mutex_lock(&stock_mutex_);
+        while (stock_count_ && n < kStockQueue) {
+            batch[n++] = stock_queue_[stock_head_];
+            stock_head_ = (stock_head_ + 1) % kStockQueue;
+            --stock_count_;
+        }
+        pthread_mutex_unlock(&stock_mutex_);
+        if (!subscribed_ || !stock_requested.load(std::memory_order_acquire)) return;
+        unsigned char packet[kStockSize];
+        for (size_t i = 0; i < n; ++i) {
+            const StockRecord& r = batch[i];
+            std::memset(packet, 0, sizeof(packet));
+            packet[0] = kStock;
+            packet[1] = kVersion;
+            packet[2] = r.flags;
+            packet[3] = static_cast<unsigned char>(r.classification);
+            store<uint32_t>(packet, 4, stock_seq_++);
+            store<uint64_t>(packet, 8, r.source_ns);
+            std::memcpy(packet + 16, r.raw, sizeof(r.raw));
+            std::memcpy(packet + 156, r.instant, sizeof(r.instant));
+            std::memcpy(packet + 288, r.final_values, sizeof(r.final_values));
+            store<uint32_t>(packet, 420, crc32(packet, 420));
+            if (send(packet, sizeof(packet), subscriber_)) ++stock_sent_;
+            else ++stock_send_drops_;
+        }
+    }
     void stats(uint64_t now_ms) {
         if (!last_stats_ms_) { last_stats_ms_ = now_ms; return; }
         if (now_ms - last_stats_ms_ < 5000) return;
         if (subscribed_ || send_errors_ || copy_drops)
-            log("MouthLink: copied=%llu copy_drops=%llu sent=%llu fragments=%llu send_drops=%llu errors=%llu",
+            log("MouthLink: copied=%llu copy_drops=%llu sent=%llu fragments=%llu send_drops=%llu errors=%llu"
+                " stock_queued=%llu stock_sent=%llu stock_drops=%llu",
                 (unsigned long long)copied_frames.load(), (unsigned long long)copy_drops.load(),
                 (unsigned long long)sent_frames_, (unsigned long long)sent_fragments_,
-                (unsigned long long)send_drops_, (unsigned long long)send_errors_);
+                (unsigned long long)send_drops_, (unsigned long long)send_errors_,
+                (unsigned long long)stock_queued.load(), (unsigned long long)stock_sent_,
+                (unsigned long long)(stock_queue_drops.load() + stock_send_drops_));
         last_stats_ms_ = now_ms;
     }
 
@@ -470,10 +541,33 @@ public:
         pthread_cond_signal(&changed_);
         pthread_mutex_unlock(&mutex_);
     }
+    void offer_stock(uint64_t source_ns, const float* raw35, const float* instant33,
+                     const float* final33, bool valid, bool warmup, int8_t classification) {
+        if (!stock_requested.load(std::memory_order_acquire)) return;
+        if (pthread_mutex_trylock(&stock_mutex_) != 0) { ++stock_queue_drops; return; }
+        if (stock_count_ == kStockQueue) {
+            // Oldest is dropped: the sender is behind, keep the freshest labels.
+            stock_head_ = (stock_head_ + 1) % kStockQueue;
+            --stock_count_;
+            ++stock_queue_drops;
+        }
+        StockRecord& r = stock_queue_[(stock_head_ + stock_count_) % kStockQueue];
+        r.source_ns = source_ns;
+        std::memcpy(r.raw, raw35, sizeof(r.raw));
+        std::memcpy(r.instant, instant33, sizeof(r.instant));
+        std::memcpy(r.final_values, final33, sizeof(r.final_values));
+        r.flags = uint8_t((valid ? 1 : 0) | (warmup ? 2 : 0));
+        r.classification = classification;
+        ++stock_count_;
+        ++stock_queued;
+        pthread_mutex_unlock(&stock_mutex_);
+        pthread_cond_signal(&changed_);
+    }
     void run() {
         for (;;) {
             handle_control();
             expire(monotonic_ms());
+            send_stock();
             const int slot = take_ready();
             if (slot >= 0) {
                 send_frame(slots_[slot]);
@@ -507,6 +601,13 @@ void start() noexcept {
     // Publish only a fully running sender. A hook can arrive as soon as the
     // expression plugin is installed, including while bind/thread setup fails.
     global_sender.store(sender, std::memory_order_release);
+}
+void offer_stock(uint64_t source_ns, const float raw35[35], const float instant33[33],
+                 const float final33[33], bool valid, bool warmup, int8_t classification) noexcept {
+    auto* sender = global_sender.load(std::memory_order_acquire);
+    if (!sender || !raw35 || !instant33 || !final33) return;
+    try { sender->offer_stock(source_ns, raw35, instant33, final33, valid, warmup, classification); }
+    catch (...) { /* Labels are optional; never disturb expression tracking. */ }
 }
 void offer(const expression_high_rate::Mat* mouth, uint64_t source_ns) noexcept {
     auto* sender = global_sender.load(std::memory_order_acquire);

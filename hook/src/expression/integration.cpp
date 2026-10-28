@@ -4,6 +4,7 @@
 #include "state.h"
 #include "high_rate.h"
 #include "mouth.h"
+#include "mouthlink/mouthlink.h"
 
 #include <cmath>
 #include <cstring>
@@ -217,6 +218,13 @@ void end_frame(float* output) {
             frame.owner, frame.raw, frame.timing.source_ns[2]);
 #endif
         if (reset) reset_mouth_quality(frame.state->mouth_filter);
+        // Optional MouthLink STOCK labels: only a newly accepted mouth source, so
+        // the values pair 1:1 with the camera frame carrying the same source_ns.
+        const MouthState& mf = frame.state->mouth_filter;
+        if (mf.diagnostics.update == SourceUpdate::Updated)
+            mouthlink::offer_stock(frame.timing.source_ns[2], frame.mouth_raw, mf.instant,
+                                   mf.previous, output[53] > 0.5f, mf.diagnostics.warmup,
+                                   static_cast<int8_t>(mf.diagnostics.classification));
     } else if (frame.timing.slow) output[53] = 0.0f;
     std::memcpy(frame.final, output, sizeof(frame.final));
     for (unsigned i = 0; i < 2; ++i)

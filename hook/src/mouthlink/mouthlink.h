@@ -15,4 +15,10 @@ void configure(bool enabled, uint16_t control_port, LogFn log) noexcept;
 void start() noexcept;
 // Called from FaceTrackor dispatch. Noexcept and non-blocking towards the network.
 void offer(const expression_high_rate::Mat* mouth, uint64_t source_ns) noexcept;
+// Called from the expression thread after the stock mouth filter accepted a new
+// source. raw35 = stock network output, instant33 = post-processed but unsmoothed,
+// final33 = smoothed output exported to the bridge; both 33-vectors in mouth33 order.
+// Non-blocking; queued only while a subscriber asked for STOCK.
+void offer_stock(uint64_t source_ns, const float raw35[35], const float instant33[33],
+                 const float final33[33], bool valid, bool warmup, int8_t classification) noexcept;
 }

@@ -84,15 +84,18 @@ void expect_no_datagram() {
 void discover(bool active, uint16_t width, uint16_t height, uint8_t format) {
     send_control({0x06, 0x01});
     const auto hello = receive();
-    check(hello.size() == 8 && hello[0] == 0x07 && hello[1] == 1, "HELLO shape");
+    check(hello.size() == 9 && hello[0] == 0x07 && hello[1] == 1, "HELLO shape");
+    check(hello[8] & 1, "HELLO advertises STOCK");
     check(hello[2] == (active ? 1 : 0), "HELLO camera activity");
     check(hello[3] == format, "HELLO pixel format");
     check(load<uint16_t>(hello.data(), 4) == width && load<uint16_t>(hello.data(), 6) == height,
           "HELLO native dimensions");
 }
 void subscribe(uint16_t port, uint8_t fps = 0, uint16_t x = 0, uint16_t y = 0,
-               uint16_t width = 0, uint16_t height = 0) {
-    std::vector<unsigned char> packet(14);
+               uint16_t width = 0, uint16_t height = 0, int stock = -1) {
+    // stock < 0: legacy 14-byte SUBSCRIBE; 0/1: 16-byte SUBSCRIBE with the flag byte.
+    std::vector<unsigned char> packet(stock < 0 ? 14 : 16);
+    if (stock > 0) packet[14] = 1;
     packet[0] = 0x02; packet[1] = 1;
     store<uint16_t>(packet.data(), 2, port);
     packet[4] = fps;
@@ -243,6 +246,39 @@ int main() {
     check(got60 >= 58 && got60 <= 62, "fps 60 must pass ~2/3 of 90 Hz frames");
     check(got45 >= 44 && got45 <= 46, "fps 45 must pass every other frame");
     check(got30 >= 29 && got30 <= 31, "fps 30 must pass every third frame");
+
+    // STOCK: not sent without the flag, sent with it, CRC and fields intact.
+    float raw[35], inst[33], fin[33];
+    for (int i = 0; i < 35; ++i) raw[i] = 0.01f * float(i) - 0.1f;
+    for (int i = 0; i < 33; ++i) { inst[i] = 0.02f * float(i); fin[i] = 0.5f + 0.01f * float(i); }
+    subscribe(reply_port, 0, 0, 0, 0, 0, 0);
+    mouthlink::offer_stock(777, raw, inst, fin, true, false, 1);
+    expect_no_datagram();
+    subscribe(reply_port, 0, 0, 0, 0, 0, 1);
+    mouthlink::offer_stock(888, raw, inst, fin, true, true, -1);
+    {
+        const auto st = receive();
+        check(st.size() == 424 && st[0] == 0x08 && st[1] == 1, "STOCK shape");
+        check(load<uint32_t>(st.data(), 420) == crc32(st.data(), 420), "STOCK CRC32");
+        check(st[2] == 3 && int8_t(st[3]) == -1, "STOCK flags/class");
+        check(load<uint64_t>(st.data(), 8) == 888, "STOCK source timestamp");
+        check(load<float>(st.data(), 16 + 4 * 34) == raw[34], "STOCK raw35");
+        check(load<float>(st.data(), 156 + 4 * 32) == inst[32], "STOCK instant33");
+        check(load<float>(st.data(), 288) == fin[0] && load<float>(st.data(), 288 + 4 * 32) == fin[32],
+              "STOCK final33");
+    }
+    // A burst larger than the queue keeps the freshest records and never blocks.
+    for (int i = 0; i < 100; ++i) mouthlink::offer_stock(1000 + i, raw, inst, fin, false, false, 0);
+    {
+        size_t got = 0; uint64_t last = 0;
+        for (auto st = receive(300); !st.empty(); st = receive(300)) {
+            if (st[0] == 0x08) { ++got; last = load<uint64_t>(st.data(), 8); }
+        }
+        check(got >= 32 && last == 1099, "STOCK burst keeps freshest");
+    }
+    subscribe(reply_port, 0, 0, 0, 0, 0, -1); // legacy SUBSCRIBE turns STOCK off
+    mouthlink::offer_stock(5000, raw, inst, fin, true, false, 1);
+    expect_no_datagram();
 
     send_control({0x03, 0x01});
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
