@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -43,6 +44,15 @@ constexpr uint8_t kGray8 = 0x01, kGray16Le = 0x02;
 bool configured_enabled = false;
 uint16_t configured_port = kDefaultControlPort;
 LogFn configured_log = nullptr;
+char configured_allow[256] = "";
+
+// Control-packet source filter. The stream is a live image of the user's face, so only
+// listed IPv4 sources may SUBSCRIBE (or PING/DISCOVER). Default "private": RFC 1918,
+// link-local, loopback and CGNAT/Tailscale ranges — never a public address, which also
+// keeps the 16-byte SUBSCRIBE from being used to aim ~118 Mbit/s at a spoofed public host.
+// "any" is an explicit opt-out. A list that does not parse allows nothing (fail closed).
+struct AllowRule { uint32_t network, mask; };
+constexpr size_t kMaxAllowRules = 16;
 
 uint64_t monotonic_ns() {
     timespec ts {};
@@ -50,6 +60,67 @@ uint64_t monotonic_ns() {
         ? uint64_t(ts.tv_sec) * 1000000000ULL + uint64_t(ts.tv_nsec) : 0;
 }
 uint64_t monotonic_ms() { return monotonic_ns() / 1000000ULL; }
+
+uint32_t prefix_mask(unsigned bits) { return bits == 0 ? 0 : 0xffffffffU << (32 - bits); }
+
+bool add_rule(AllowRule* rules, size_t& count, uint32_t network, unsigned bits) {
+    if (count == kMaxAllowRules) return false;
+    rules[count++] = {network & prefix_mask(bits), prefix_mask(bits)};
+    return true;
+}
+
+bool add_private(AllowRule* rules, size_t& count) {
+    return add_rule(rules, count, 0x0a000000U, 8)      // 10.0.0.0/8
+        && add_rule(rules, count, 0xac100000U, 12)     // 172.16.0.0/12
+        && add_rule(rules, count, 0xc0a80000U, 16)     // 192.168.0.0/16
+        && add_rule(rules, count, 0xa9fe0000U, 16)     // 169.254.0.0/16 link-local
+        && add_rule(rules, count, 0x7f000000U, 8)      // 127.0.0.0/8
+        && add_rule(rules, count, 0x64400000U, 10);    // 100.64.0.0/10 CGNAT / Tailscale
+}
+
+// Parses "private", "any", "a.b.c.d" and "a.b.c.d/n" separated by spaces, commas, ';' or
+// newlines (host byte order). Returns false — and no rules — on any malformed entry.
+bool parse_allow(const char* text, AllowRule* rules, size_t& count) {
+    count = 0;
+    char token[48];
+    size_t length = 0;
+    bool any_token = false;
+    for (const char* p = text;; ++p) {
+        const char c = *p;
+        const bool separator = !c || c == ' ' || c == ',' || c == ';' || c == '\n' || c == '\r' || c == '\t';
+        if (!separator) {
+            if (length + 1 >= sizeof(token)) { count = 0; return false; }
+            token[length++] = c;
+            continue;
+        }
+        if (length) {
+            token[length] = '\0';
+            length = 0;
+            any_token = true;
+            if (!strcmp(token, "private")) {
+                if (!add_private(rules, count)) { count = 0; return false; }
+            } else if (!strcmp(token, "any")) {
+                if (!add_rule(rules, count, 0, 0)) { count = 0; return false; }
+            } else {
+                unsigned bits = 32;
+                char* slash = strchr(token, '/');
+                if (slash) {
+                    *slash = '\0';
+                    char* end = nullptr;
+                    const unsigned long value = strtoul(slash + 1, &end, 10);
+                    if (end == slash + 1 || *end || value > 32) { count = 0; return false; }
+                    bits = unsigned(value);
+                }
+                in_addr address {};
+                if (inet_pton(AF_INET, token, &address) != 1 ||
+                    !add_rule(rules, count, ntohl(address.s_addr), bits)) { count = 0; return false; }
+            }
+        }
+        if (!c) break;
+    }
+    if (!any_token) return add_private(rules, count);   // empty / absent file: default
+    return true;
+}
 
 template<class T> T load(const void* object, size_t offset) {
     T value;
@@ -174,6 +245,10 @@ class Sender {
 
     sockaddr_in subscriber_ {};
     bool subscribed_ = false;
+    AllowRule allow_[kMaxAllowRules] {};
+    size_t allow_count_ = 0;
+    bool allow_ok_ = false;
+    uint64_t rejected_ = 0, rejected_logged_ms_ = 0;
     uint64_t lease_until_ms_ = 0;
     uint8_t target_fps_ = 0, requested_format_ = 0;
     uint16_t roi_x_ = 0, roi_y_ = 0, roi_w_ = 0, roi_h_ = 0;
@@ -219,6 +294,23 @@ class Sender {
         next_source_ns_ = 0;
         log("MouthLink: stream stopped (%s)", reason);
     }
+    bool allowed(const in_addr& address) const {
+        const uint32_t host = ntohl(address.s_addr);
+        for (size_t i = 0; i < allow_count_; ++i)
+            if ((host & allow_[i].mask) == allow_[i].network) return true;
+        return false;
+    }
+    // At most one log line per 10 s for rejected control packets (a flood must not flood logcat).
+    void reject(const in_addr& address, const char* why) {
+        ++rejected_;
+        const uint64_t now = monotonic_ms();
+        if (rejected_logged_ms_ && now - rejected_logged_ms_ < 10000) return;
+        rejected_logged_ms_ = now;
+        char text[INET_ADDRSTRLEN] = "?";
+        inet_ntop(AF_INET, &address, text, sizeof(text));
+        log("MouthLink: ignored control packet from %s (%s); rejected so far %llu",
+            text, why, (unsigned long long)rejected_);
+    }
     void expire(uint64_t now_ms) {
         if (subscribed_ && now_ms > lease_until_ms_) unsubscribe("subscription lease expired");
     }
@@ -226,6 +318,12 @@ class Sender {
         if (size < 14) return;
         const uint16_t reply_port = load<uint16_t>(data, 2);
         if (!reply_port) return;
+        // The stream belongs to one PC until its lease runs out: another address cannot take
+        // it over (or redirect it) while the owner keeps renewing. The owner may change port.
+        if (subscribed_ && subscriber_.sin_addr.s_addr != from.sin_addr.s_addr) {
+            reject(from.sin_addr, "stream owned by another subscriber");
+            return;
+        }
         subscriber_ = {};
         subscriber_.sin_family = AF_INET;
         subscriber_.sin_addr = from.sin_addr;
@@ -267,13 +365,20 @@ class Sender {
                     log("MouthLink: recvfrom failed errno=%d", errno);
                 return;
             }
-            if (size < 2 || from_size != sizeof(from)) continue;
+            if (size < 2 || from_size != sizeof(from) || from.sin_family != AF_INET) continue;
+            if (!allowed(from.sin_addr)) {
+                reject(from.sin_addr, allow_ok_ ? "not in allow list" : "allow list invalid, nothing allowed");
+                continue;
+            }
             switch (data[0]) {
             case kSubscribe:
                 handle_subscribe(data, size_t(size), from);
                 break;
             case kUnsubscribe:
-                unsubscribe("UNSUBSCRIBE");
+                if (subscribed_ && subscriber_.sin_addr.s_addr == from.sin_addr.s_addr)
+                    unsubscribe("UNSUBSCRIBE");
+                else if (subscribed_)
+                    reject(from.sin_addr, "UNSUBSCRIBE from a non-subscriber");
                 break;
             case kPing:
                 if (size >= 16) {
@@ -459,17 +564,20 @@ class Sender {
         if (now_ms - last_stats_ms_ < 5000) return;
         if (subscribed_ || send_errors_ || copy_drops)
             log("MouthLink: copied=%llu copy_drops=%llu sent=%llu fragments=%llu send_drops=%llu errors=%llu"
-                " stock_queued=%llu stock_sent=%llu stock_drops=%llu",
+                " stock_queued=%llu stock_sent=%llu stock_drops=%llu rejected=%llu",
                 (unsigned long long)copied_frames.load(), (unsigned long long)copy_drops.load(),
                 (unsigned long long)sent_frames_, (unsigned long long)sent_fragments_,
                 (unsigned long long)send_drops_, (unsigned long long)send_errors_,
                 (unsigned long long)stock_queued.load(), (unsigned long long)stock_sent_,
-                (unsigned long long)(stock_queue_drops.load() + stock_send_drops_));
+                (unsigned long long)(stock_queue_drops.load() + stock_send_drops_),
+                (unsigned long long)rejected_);
         last_stats_ms_ = now_ms;
     }
 
 public:
-    Sender(uint16_t port, LogFn log) : port_(port), log_(log) {}
+    Sender(uint16_t port, const char* allow, LogFn log) : port_(port), log_(log) {
+        allow_ok_ = parse_allow(allow ? allow : "", allow_, allow_count_);
+    }
     bool start() {
         fd_ = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
         if (fd_ < 0) { log("MouthLink: socket failed errno=%d", errno); return false; }
@@ -495,6 +603,11 @@ public:
         }
         pthread_detach(thread_);
         log("MouthLink: listening on UDP %u; raw streaming waits for SUBSCRIBE", unsigned(port_));
+        if (!allow_ok_)
+            log("MouthLink: allow list does not parse; every control packet is ignored (fail closed)");
+        else
+            log("MouthLink: control accepted from %u address range(s)%s", unsigned(allow_count_),
+                allow_count_ == 1 && allow_[0].mask == 0 ? " — ANY address (\"any\")" : "");
         return true;
     }
     void offer(const expression_high_rate::Mat* mat, uint64_t source_ns) {
@@ -582,14 +695,19 @@ std::atomic<Sender*> global_sender {nullptr};
 
 } // namespace
 
-void configure(bool enabled, uint16_t control_port, LogFn log) noexcept {
+void configure(bool enabled, uint16_t control_port, const char* allow, LogFn log) noexcept {
     configured_enabled = enabled;
     configured_port = control_port ? control_port : kDefaultControlPort;
     configured_log = log;
+    configured_allow[0] = '\0';
+    if (allow) {
+        strncpy(configured_allow, allow, sizeof(configured_allow) - 1);
+        configured_allow[sizeof(configured_allow) - 1] = '\0';
+    }
 }
 void start() noexcept {
     if (!configured_enabled || global_sender.load(std::memory_order_acquire)) return;
-    auto* sender = new (std::nothrow) Sender(configured_port, configured_log);
+    auto* sender = new (std::nothrow) Sender(configured_port, configured_allow, configured_log);
     if (!sender) {
         if (configured_log) configured_log("MouthLink: cannot allocate sender; disabled");
         return;

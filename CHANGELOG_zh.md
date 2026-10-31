@@ -2,6 +2,24 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## [2.4.2-ml4] - 2026-10-31
+
+分支版本（PicoET-Enhance-MouthLink）：上游 2.4.2 加上可选的 MouthLink 嘴部摄像头数据源。MouthLink 关闭时（默认）行为与上游 2.4.2 完全一致。
+
+### 新功能
+- MouthLink 原始数据源（ml1）：`picoet.sh mouthlink-on|mouthlink-off` 通过 UDP 将现有 FaceTrackor 钩子已获得的下半脸摄像头帧（400×400 红外，90 Hz，`GRAY8`/`GRAY16LE`）发送给已订阅的 PC，支持 ROI、带 CRC32 的分片、PING/PONG 与 DISCOVER/HELLO。需手动开启；收到 `SUBSCRIBE` 前不发送任何数据。
+- `SUBSCRIBE` 帧率限制不再使 90 Hz 摄像头减半（ml2）。
+- STOCK 标签（ml3）：按需为每一帧发送原厂网络输出与嘴部数值，时间戳与该帧一致，用于训练自定义模型。
+- 允许列表（ml4）：`picoet.sh mouthlink-allow <private|any|IP[/位数],...>`，保存在 `/data/local/tmp/picoet-mouthlink-allow`，`status` 中可见。
+
+### 安全（ml4）
+- 默认只接受来自私有网络（10/8、172.16/12、192.168/16、169.254/16、127/8、100.64/10）或允许列表中的控制包；格式错误的列表不允许任何来源。公网地址既无法查看摄像头，也无法把视频流引向伪造的公网主机。
+- 正在进行的视频流归当前订阅者所有：其他地址的 `SUBSCRIBE` 不再能重定向它，`UNSUBSCRIBE` 只接受订阅者发出的。被拒绝的包会计数，日志每 10 秒最多记录一次。
+
+### 说明与注意事项
+- 视频流未加密；请使用可信网络，切勿将 UDP 9040/9041 暴露到互联网。
+- 固件支持、哈希、眼动行为、schema 2 / `EPI1` v2 / `X` v2 及配套组件要求与上游 2.4.2 相同。
+
 ## [2.4.2] - 2026-10-24
 
 ### 修复

@@ -3,7 +3,7 @@
 English | [简体中文](README_zh.md)
 
 > **This is a fork of [WolalaQAQ/PicoET-Enhance](https://github.com/WolalaQAQ/PicoET-Enhance)**
-> (branch `mouthlink`, module version `2.4.2-ml3`): upstream v2.4.2 plus an opt-in
+> (branch `mouthlink`, module version `2.4.2-ml4`): upstream v2.4.2 plus an opt-in
 > **MouthLink** source for custom mouth tracking.
 >
 > - Raw mouth-camera stream (400×400 IR, 90 Hz) to a PC over UDP, captured inside the
@@ -11,6 +11,8 @@ English | [简体中文](README_zh.md)
 > - Optional per-frame stock mouth labels (network output, unsmoothed and smoothed
 >   values) carrying the same timestamp as the camera frame, for training a custom model.
 > - Disabled by default. Eye tracking and stock mouth output are unchanged.
+> - Only private-network PCs may subscribe by default; an allow list narrows it to your PC,
+>   and a running stream cannot be taken over by another address (ml4).
 >
 > The PC side (receiver, recording, dataset builder, training) is
 > [MouthLink](https://github.com/UndefinedSignal/MouthLink). Details:
@@ -158,7 +160,25 @@ adb shell su -c 'sh /data/adb/modules/picoet-enhance/picoet.sh status'
 
 Then run `MouthLink.Receiver --host <headset-IP>` on the PC and open its viewer (by default `http://localhost:8080/`). Use `mouthlink-off --force` to disable the source. The control port defaults to UDP 9040 and can be changed only before service startup with `/data/local/tmp/picoet-mouthlink-port`.
 
-Network sending runs on a worker thread. The camera thread uses a non-blocking slot handoff and never waits for UDP; overload drops frames rather than delaying inference. Frames larger than 4 MiB, non-monochrome or other OpenCV depths are rejected. No JPEG/LZ4 conversion is performed. Raw images remain biometric data: use only a trusted LAN, do not expose the UDP ports to the internet, and do not commit recordings.
+### Who may subscribe (ml4)
+
+The camera stream is a live image of your face, so control packets (`SUBSCRIBE`, `UNSUBSCRIBE`, `PING`, `DISCOVER`) are accepted only from an allow list read at service start from `/data/local/tmp/picoet-mouthlink-allow`:
+
+- `private` (default, also when the file is absent): 10/8, 172.16/12, 192.168/16, 169.254/16, 127/8 and 100.64/10 (CGNAT, Tailscale). A public source address is never answered, which also keeps a spoofed 16-byte `SUBSCRIBE` from aiming the ~118 Mbit/s stream at a public host.
+- IPv4 addresses and CIDR ranges, separated by commas or spaces, e.g. `192.168.1.10` or `192.168.1.0/24,10.0.0.5`. Recommended: just your PC.
+- `any`: explicit opt-out of the filter.
+- A list that does not parse allows nothing (fail closed); the hook log says so.
+
+```sh
+adb shell su -c 'sh /data/adb/modules/picoet-enhance/picoet.sh mouthlink-allow 192.168.1.10 --force'
+adb shell su -c 'sh /data/adb/modules/picoet-enhance/picoet.sh mouthlink-allow private --force'
+```
+
+The command saves the list and, when MouthLink is on, restarts tracking to apply it; `status` shows `mouthlink_allow=`. While one address holds the stream (its lease is renewed every second), a `SUBSCRIBE` from another allowed address is ignored instead of redirecting the stream, and `UNSUBSCRIBE` is accepted only from the subscriber. After the owner stops, the next PC can subscribe within 3 seconds. Rejected packets are counted (`rejected=` in the hook statistics) and logged at most once per 10 seconds.
+
+The stream itself is not encrypted: anyone who can read the Wi-Fi traffic (for example with its password) can see it. Use a trusted network and never forward UDP 9040/9041 from the internet.
+
+Network sending runs on a worker thread. The camera thread uses a non-blocking slot handoff and never waits for UDP; overload drops frames rather than delaying inference. Frames larger than 4 MiB, non-monochrome or other OpenCV depths are rejected. No JPEG/LZ4 conversion is performed. Raw images remain biometric data: do not commit recordings.
 
 The host-only synthetic transport test does not need Android or PICO libraries:
 
@@ -166,7 +186,7 @@ The host-only synthetic transport test does not need Android or PICO libraries:
 g++ -std=c++17 -O2 -Wall -Wextra -Werror -Ihook/src \
   hook/src/mouthlink/mouthlink.cpp hook/tests/mouthlink_test.cpp \
   -pthread -o /tmp/mouthlink_test
-/tmp/mouthlink_test
+/tmp/mouthlink_test && /tmp/mouthlink_test default-allow && /tmp/mouthlink_test fail-closed
 ```
 
 The subscription frame-rate limit (`SUBSCRIBE` fps) sends every camera frame at 0 or ≥ 90; lower rates use a source-clock grid with a quarter-period slack, so a 90 Hz camera gives exactly 60, 45 or 30 fps (ml2).

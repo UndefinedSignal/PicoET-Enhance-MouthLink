@@ -3,9 +3,11 @@
 [English](README.md) | 简体中文
 
 > **本仓库是 [WolalaQAQ/PicoET-Enhance](https://github.com/WolalaQAQ/PicoET-Enhance) 的分支**
-> （`mouthlink` 分支，模块版本 `2.4.2-ml3`）：在上游 v2.4.2 基础上增加可选的 **MouthLink**
+> （`mouthlink` 分支，模块版本 `2.4.2-ml4`）：在上游 v2.4.2 基础上增加可选的 **MouthLink**
 > 嘴部摄像头数据流（400×400 红外，90 Hz，经 UDP 发送到 PC）以及逐帧原厂嘴部数值标签，
 > 用于训练自定义嘴部追踪模型。默认关闭；眼动追踪与原厂嘴部输出保持不变。
+> 默认只允许私有网络中的 PC 订阅，可用 `picoet.sh mouthlink-allow <PC-IP>` 限定为本机，
+> 正在进行的视频流不能被其他地址接管（ml4）。视频流未加密：请使用可信网络，切勿将 UDP 9040/9041 暴露到互联网。
 > PC 端见 [MouthLink](https://github.com/UndefinedSignal/MouthLink)，详细说明见英文 README。
 > 以下内容为上游文档。MouthLink 相关问题请在本分支提交，而不是上游。
 

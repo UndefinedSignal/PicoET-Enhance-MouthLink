@@ -2,6 +2,24 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
+## [2.4.2-ml4] - 2026-10-31
+
+Fork release (PicoET-Enhance-MouthLink): upstream 2.4.2 plus the optional MouthLink mouth-camera source. With MouthLink off (the default) the module behaves exactly like upstream 2.4.2.
+
+### Features
+- MouthLink RAW source (ml1): `picoet.sh mouthlink-on|mouthlink-off` streams the lower-face camera frame the existing FaceTrackor hook already receives (400×400 IR, 90 Hz, `GRAY8`/`GRAY16LE`) over UDP to a subscribed PC, with ROI, fragments with CRC32, PING/PONG and DISCOVER/HELLO. Opt-in; nothing is sent before `SUBSCRIBE`.
+- `SUBSCRIBE` frame-rate limit without halving a 90 Hz camera (ml2).
+- STOCK labels (ml3): on request, the stock network output and mouth values for every frame, with the frame's own timestamp, for training a custom model.
+- Allow list (ml4): `picoet.sh mouthlink-allow <private|any|IP[/bits],...>`, stored in `/data/local/tmp/picoet-mouthlink-allow` and shown by `status`.
+
+### Security (ml4)
+- Control packets are accepted only from private networks by default (10/8, 172.16/12, 192.168/16, 169.254/16, 127/8, 100.64/10) or from the allow list; a malformed list allows nothing. A public address can neither watch the camera nor aim the stream at a spoofed public host.
+- A running stream stays with its subscriber: `SUBSCRIBE` from another address no longer redirects it and `UNSUBSCRIBE` is accepted only from the subscriber. Rejections are counted and logged at most once per 10 s.
+
+### Notes & Caveats
+- The stream is not encrypted; use a trusted network and never forward UDP 9040/9041 from the internet.
+- Firmware support, hashes, eye-tracking behaviour, schema 2 / `EPI1` v2 / `X` v2 and companion requirements are those of upstream 2.4.2.
+
 ## [2.4.2] - 2026-10-24
 
 ### Fixed

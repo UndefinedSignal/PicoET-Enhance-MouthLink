@@ -10,7 +10,9 @@ namespace mouthlink {
 using LogFn = void (*)(const char* message);
 
 // Startup-only. Disabled by default; control_port=0 selects UDP 9040.
-void configure(bool enabled, uint16_t control_port, LogFn log) noexcept;
+// allow: control-packet sources, "private" (default when empty/null), "any", or IPv4
+// addresses / CIDR ranges separated by spaces or commas; a malformed list allows nothing.
+void configure(bool enabled, uint16_t control_port, const char* allow, LogFn log) noexcept;
 // Starts the control/sender thread. Failures disable only MouthLink, never PicoET.
 void start() noexcept;
 // Called from FaceTrackor dispatch. Noexcept and non-blocking towards the network.

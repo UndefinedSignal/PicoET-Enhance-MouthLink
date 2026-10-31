@@ -148,6 +148,24 @@ static int save_mouthlink(const char *mode)
     return save_setting("/data/local/tmp/picoet-mouthlink", !strcmp(mode, "off") ? "off\n" : "on\n");
 }
 
+// MouthLink control allow list: "private", "any", IPv4 addresses / CIDR ranges separated
+// by commas or spaces. Only the character set and length are checked here; the payload
+// parses it at service start and allows nothing if it is malformed.
+static int save_mouthlink_allow(const char *value)
+{
+    size_t len = strlen(value);
+    if (!len || len > 200) return 2;
+    for (size_t i = 0; i < len; i++) {
+        char c = value[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || c == '.' || c == '/' || c == ',' || c == ' '))
+            return 2;
+    }
+    if (prepare_state()) return 2;
+    char line[208];
+    snprintf(line, sizeof(line), "%s\n", value);
+    return save_setting("/data/local/tmp/picoet-mouthlink-allow", line);
+}
+
 static int prepare_runtime(int reset)
 {
     if (mkdir("/data/local/tmp/picoet-runtime", 0700) != 0 && errno != EEXIST) return 2;
@@ -990,6 +1008,7 @@ int main(int argc, char **argv)
     if (argc >= 2 && (!strcmp(argv[1], "--read-file") || !strcmp(argv[1], "--read-log") ||
                       !strcmp(argv[1], "--normalize-mode") ||
                       !strcmp(argv[1], "--save-mode") || !strcmp(argv[1], "--save-mouthlink") ||
+                      !strcmp(argv[1], "--save-mouthlink-allow") ||
                       !strcmp(argv[1], "--prepare-runtime"))) {
         if (geteuid() != 0) return 2;
         if (!strcmp(argv[1], "--read-file") && argc == 3) return read_control_file(argv[2], 0);
@@ -997,6 +1016,7 @@ int main(int argc, char **argv)
             return read_control_file("/data/local/tmp/picoet-hook.log", 1);
         if (!strcmp(argv[1], "--save-mode") && argc == 3) return save_mode(argv[2]);
         if (!strcmp(argv[1], "--save-mouthlink") && argc == 3) return save_mouthlink(argv[2]);
+        if (!strcmp(argv[1], "--save-mouthlink-allow") && argc == 3) return save_mouthlink_allow(argv[2]);
         if (!strcmp(argv[1], "--normalize-mode") && argc == 2) return normalize_mode();
         if (!strcmp(argv[1], "--prepare-runtime") && argc == 2) return prepare_runtime(0);
         if (!strcmp(argv[1], "--prepare-runtime") && argc == 3 && !strcmp(argv[2], "--reset"))

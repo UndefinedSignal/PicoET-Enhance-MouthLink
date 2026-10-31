@@ -40,6 +40,7 @@ constexpr const char kEyeHzFile[] = "/data/local/tmp/picoet-eye-hz";
 constexpr const char kMouthHzFile[] = "/data/local/tmp/picoet-mouth-hz";
 constexpr const char kMouthLinkFile[] = "/data/local/tmp/picoet-mouthlink";
 constexpr const char kMouthLinkPortFile[] = "/data/local/tmp/picoet-mouthlink-port";
+constexpr const char kMouthLinkAllowFile[] = "/data/local/tmp/picoet-mouthlink-allow";
 constexpr const char kHookLog[] = "/data/local/tmp/picoet-hook.log";
 constexpr const char kPluginSoname[] = "libpxreyetracking.phoenix.so";
 constexpr uint64_t kPluginMinLoadBytes = 0x34279c;
@@ -189,6 +190,22 @@ int read_mouthlink_enabled()
     if (strcmp(buf, "on") == 0) return 1;
     if (strcmp(buf, "off") != 0) log_fmt("MouthLink: unrecognized setting '%s'; disabled", buf);
     return 0;
+}
+
+// Startup-only allow list for MouthLink control packets (see mouthlink.h). Absent → "".
+// An unreadable or oversized file yields "invalid", which the parser rejects: fail closed.
+void read_mouthlink_allow(char* out, size_t size)
+{
+    out[0] = '\0';
+    int fd = picoet_open_root_file(kMouthLinkAllowFile, O_RDONLY, 0);
+    if (fd < 0) {
+        if (errno != ENOENT) snprintf(out, size, "invalid");
+        return;
+    }
+    ssize_t n = read(fd, out, size - 1);
+    close(fd);
+    if (n < 0 || (size_t)n == size - 1) { snprintf(out, size, "invalid"); return; }
+    out[n] = '\0';
 }
 
 // ---- unchanged service-local P1 gate ---------------------------------------
@@ -847,8 +864,12 @@ __attribute__((constructor)) void picoet_init()
         mouthlink_port = 9040;
     }
     const bool mouthlink_enabled = read_mouthlink_enabled() != 0;
-    mouthlink::configure(mouthlink_enabled, static_cast<uint16_t>(mouthlink_port), mouthlink_log);
-    log_fmt("MouthLink startup: enabled=%u control_port=%u", unsigned(mouthlink_enabled), mouthlink_port);
+    char mouthlink_allow[256];
+    read_mouthlink_allow(mouthlink_allow, sizeof(mouthlink_allow));
+    mouthlink::configure(mouthlink_enabled, static_cast<uint16_t>(mouthlink_port), mouthlink_allow, mouthlink_log);
+    for (char* c = mouthlink_allow; *c; ++c) if (*c == '\n' || *c == '\r') *c = ' ';
+    log_fmt("MouthLink startup: enabled=%u control_port=%u allow=%s", unsigned(mouthlink_enabled), mouthlink_port,
+            mouthlink_allow[0] ? mouthlink_allow : "(default: private)");
     if (publish_runtime("initializing") != 0) {
         append_log("runtime state unavailable; refusing all hooks (prepare picoet-runtime directory)");
         return;

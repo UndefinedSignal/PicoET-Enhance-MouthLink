@@ -163,7 +163,54 @@ Frame receive_frame(size_t expected_fragments) {
 }
 }
 
-int main() {
+// A second local "PC" on 127.0.0.2 (Linux routes all of 127/8 to lo).
+int other = -1;
+uint16_t other_port = 0;
+void other_send(const std::vector<unsigned char>& packet) {
+    const ssize_t sent = sendto(other, packet.data(), packet.size(), 0,
+                                reinterpret_cast<const sockaddr*>(&sender), sizeof(sender));
+    check(sent == ssize_t(packet.size()), "send from second address");
+}
+bool other_receives(int timeout_ms = 200) {
+    pollfd p {other, POLLIN, 0};
+    if (poll(&p, 1, timeout_ms) <= 0) return false;
+    unsigned char data[65536];
+    return recv(other, data, sizeof(data), 0) > 0;
+}
+std::vector<unsigned char> subscribe_packet(uint16_t port) {
+    std::vector<unsigned char> packet(16);
+    packet[0] = 0x02; packet[1] = 1;
+    store<uint16_t>(packet.data(), 2, port);
+    return packet;
+}
+
+// Separate process: no allow file → "private" (loopback answered), and a malformed list
+// must allow nothing (no HELLO even from loopback).
+int allow_default_or_invalid(bool invalid) {
+    receiver = socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in local {};
+    local.sin_family = AF_INET;
+    local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    check(bind(receiver, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == 0, "receiver bind");
+    sender = local;
+    sender.sin_port = htons(19041);
+    mouthlink::configure(true, 19041, invalid ? "127.0.0.1,192.168.1.300" : "", log);
+    mouthlink::start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    send_control({0x06, 0x01});
+    if (invalid) {
+        expect_no_datagram();
+        std::puts("MouthLink malformed allow list: fail closed OK");
+    } else {
+        check(!receive(500).empty(), "default allow list answers loopback");
+        std::puts("MouthLink default allow list (private): OK");
+    }
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc > 1 && !strcmp(argv[1], "fail-closed")) return allow_default_or_invalid(true);
+    if (argc > 1 && !strcmp(argv[1], "default-allow")) return allow_default_or_invalid(false);
     receiver = socket(AF_INET, SOCK_DGRAM, 0);
     check(receiver >= 0, "receiver socket");
     sockaddr_in local {};
@@ -177,9 +224,33 @@ int main() {
     sender = local;
     sender.sin_port = htons(19040);
 
-    mouthlink::configure(true, 19040, log);
+    other = socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in second {};
+    second.sin_family = AF_INET;
+    second.sin_addr.s_addr = htonl(0x7f000002U);
+    check(bind(other, reinterpret_cast<sockaddr*>(&second), sizeof(second)) == 0, "second address bind");
+    socklen_t second_size = sizeof(second);
+    check(getsockname(other, reinterpret_cast<sockaddr*>(&second), &second_size) == 0, "second port");
+    other_port = ntohs(second.sin_port);
+
+    // 127.0.0.1 and 127.0.0.2 may control the stream; 127.0.0.3 may not.
+    mouthlink::configure(true, 19040, "127.0.0.1/32, 127.0.0.2 10.1.2.0/24", log);
     mouthlink::start();
     discover(false, 0, 0, 0);
+    {
+        const int third = socket(AF_INET, SOCK_DGRAM, 0);
+        sockaddr_in a3 {};
+        a3.sin_family = AF_INET;
+        a3.sin_addr.s_addr = htonl(0x7f000003U);
+        check(bind(third, reinterpret_cast<sockaddr*>(&a3), sizeof(a3)) == 0, "third address bind");
+        const unsigned char d[2] = {0x06, 0x01};
+        sendto(third, d, 2, 0, reinterpret_cast<const sockaddr*>(&sender), sizeof(sender));
+        pollfd p {third, POLLIN, 0};
+        check(poll(&p, 1, 200) == 0, "allow list: DISCOVER from 127.0.0.3 must be ignored");
+        close(third);
+    }
+    other_send({0x06, 0x01});
+    check(other_receives(), "allow list: DISCOVER from 127.0.0.2 is answered");
 
     const unsigned char gray8_pixels[] = {
         0,1,2,3,4,90,91,92,
@@ -279,6 +350,14 @@ int main() {
     subscribe(reply_port, 0, 0, 0, 0, 0, -1); // legacy SUBSCRIBE turns STOCK off
     mouthlink::offer_stock(5000, raw, inst, fin, true, false, 1);
     expect_no_datagram();
+
+    // A second allowed PC cannot take over or stop a stream another PC holds.
+    other_send(subscribe_packet(other_port));
+    other_send({0x03, 0x01});
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    mouthlink::offer(&gray8.mat, 3500);
+    check(!receive_frame(1).payload.empty(), "stream stays with the allowed subscriber");
+    check(!other_receives(), "no frames to the second PC while the first holds the stream");
 
     send_control({0x03, 0x01});
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
