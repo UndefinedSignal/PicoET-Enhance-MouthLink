@@ -33,7 +33,8 @@ constexpr uint8_t kSubscribeWantStock = 0x01;
 // HELLO byte 8 (9-byte HELLO): capabilities, bit 0 = STOCK supported.
 constexpr uint8_t kCapStock = 0x01;
 // STOCK v1, 424 bytes, little-endian:
-//   0 type 0x08 | 1 version 1 | 2 flags (bit0 valid, bit1 warmup) | 3 int8 class
+//   0 type 0x08 | 1 version 1 | 2 flags (bit0 valid, bit1 warmup, bit2 custom mouth
+//   postprocessing: instant/final are not stock-scale, ml5+) | 3 int8 class
 //   4 u32 seq | 8 u64 source_ns (== FRAGMENT capture timestamp of the same frame)
 //   16 f32 raw[35] | 156 f32 instant[33] | 288 f32 final[33] | 420 u32 CRC32(0..419)
 constexpr size_t kStockRaw = 35, kStockMouth = 33;
@@ -655,7 +656,8 @@ public:
         pthread_mutex_unlock(&mutex_);
     }
     void offer_stock(uint64_t source_ns, const float* raw35, const float* instant33,
-                     const float* final33, bool valid, bool warmup, int8_t classification) {
+                     const float* final33, bool valid, bool warmup, int8_t classification,
+                     bool custom_processing) {
         if (!stock_requested.load(std::memory_order_acquire)) return;
         if (pthread_mutex_trylock(&stock_mutex_) != 0) { ++stock_queue_drops; return; }
         if (stock_count_ == kStockQueue) {
@@ -669,7 +671,7 @@ public:
         std::memcpy(r.raw, raw35, sizeof(r.raw));
         std::memcpy(r.instant, instant33, sizeof(r.instant));
         std::memcpy(r.final_values, final33, sizeof(r.final_values));
-        r.flags = uint8_t((valid ? 1 : 0) | (warmup ? 2 : 0));
+        r.flags = uint8_t((valid ? 1 : 0) | (warmup ? 2 : 0) | (custom_processing ? 4 : 0));
         r.classification = classification;
         ++stock_count_;
         ++stock_queued;
@@ -721,10 +723,12 @@ void start() noexcept {
     global_sender.store(sender, std::memory_order_release);
 }
 void offer_stock(uint64_t source_ns, const float raw35[35], const float instant33[33],
-                 const float final33[33], bool valid, bool warmup, int8_t classification) noexcept {
+                 const float final33[33], bool valid, bool warmup, int8_t classification,
+                 bool custom_processing) noexcept {
     auto* sender = global_sender.load(std::memory_order_acquire);
     if (!sender || !raw35 || !instant33 || !final33) return;
-    try { sender->offer_stock(source_ns, raw35, instant33, final33, valid, warmup, classification); }
+    try { sender->offer_stock(source_ns, raw35, instant33, final33, valid, warmup, classification,
+                                    custom_processing); }
     catch (...) { /* Labels are optional; never disturb expression tracking. */ }
 }
 void offer(const expression_high_rate::Mat* mouth, uint64_t source_ns) noexcept {

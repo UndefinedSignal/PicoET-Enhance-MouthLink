@@ -22,5 +22,6 @@ void offer(const expression_high_rate::Mat* mouth, uint64_t source_ns) noexcept;
 // final33 = smoothed output exported to the bridge; both 33-vectors in mouth33 order.
 // Non-blocking; queued only while a subscriber asked for STOCK.
 void offer_stock(uint64_t source_ns, const float raw35[35], const float instant33[33],
-                 const float final33[33], bool valid, bool warmup, int8_t classification) noexcept;
+                 const float final33[33], bool valid, bool warmup, int8_t classification,
+                 bool custom_processing = false) noexcept;
 }

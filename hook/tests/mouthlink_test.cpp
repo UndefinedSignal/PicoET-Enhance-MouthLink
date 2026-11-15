@@ -338,6 +338,11 @@ int main(int argc, char** argv) {
         check(load<float>(st.data(), 288) == fin[0] && load<float>(st.data(), 288 + 4 * 32) == fin[32],
               "STOCK final33");
     }
+    mouthlink::offer_stock(889, raw, inst, fin, true, false, 1, true);
+    {
+        const auto st = receive();
+        check(st.size() == 424 && st[2] == 5, "STOCK bit 2: custom mouth postprocessing");
+    }
     // A burst larger than the queue keeps the freshest records and never blocks.
     for (int i = 0; i < 100; ++i) mouthlink::offer_stock(1000 + i, raw, inst, fin, false, false, 0);
     {

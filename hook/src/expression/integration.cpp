@@ -5,6 +5,7 @@
 #include "high_rate.h"
 #include "mouth.h"
 #include "mouthlink/mouthlink.h"
+#include "postprocessing.h"
 
 #include <cmath>
 #include <cstring>
@@ -27,7 +28,9 @@ struct OwnerState {
     uint64_t published_sources[3] {};
     uint32_t published_mask = 0;
     float right_inner = 0;
-    explicit OwnerState(uintptr_t base) : left(base), right(base) {}
+    explicit OwnerState(uintptr_t base)
+        : left(base, runtime_postprocessing().brow_q, runtime_postprocessing().brow_r),
+          right(base, runtime_postprocessing().brow_q, runtime_postprocessing().brow_r) {}
 };
 // Hooks may run before this translation unit's dynamic initializers.
 std::mutex& registry_lock() { static std::mutex value; return value; }
@@ -167,6 +170,20 @@ void fail_frame(float* output, uint32_t attempted_mask) {
     std::memcpy(frame.final, output, sizeof(frame.final));
     frame.pending_export = true;
 }
+// MouthLink STOCK flag: the mouth.* postprocessing settings differ from PICO's stock
+// values, so instant/final labels are on another scale than stock-trained models.
+static bool mouth_processing_custom() {
+    using expression_independent::PostProcessingConfig;
+    static const PostProcessingConfig stock {};
+    const PostProcessingConfig& now = expression_independent::runtime_postprocessing();
+    bool custom = false;
+#define MOUTH_FIELD(member, key, value, low, high, integer) \
+    if (std::strncmp(key, "mouth.", 6) == 0 && now.member != stock.member) custom = true;
+    PICOET_PROCESSING_FIELDS(MOUTH_FIELD)
+#undef MOUTH_FIELD
+    return custom;
+}
+
 void end_frame(float* output) {
     if (!frame.state) return;
     ReferenceFrameGuard reference_guard {frame.state->reference};
@@ -190,10 +207,11 @@ void end_frame(float* output) {
         fail_frame(output, frame.timing.attempted ? (frame.timing.slow ? 7u : 3u) : 0u);
         return;
     }
-    postprocess_eye20(frame.raw, frame.post);
+    const auto& config = runtime_postprocessing();
+    postprocess_eye20(frame.raw, frame.post, config);
     void* contexts[2] = {&frame.state->left, &frame.state->right};
     filter_eye20_dt(frame.state->dt_filter, frame.raw, frame.post, frame.filtered,
-                    frame.timing.source_ns, NativeBrowFilter::predict_dt, contexts);
+                    frame.timing.source_ns, NativeBrowFilter::predict_dt, contexts, config);
     frame.right_inner = writeback_expression52(frame.filtered, output);
     frame.state->right_inner = frame.right_inner;
     const Validity validity = observe_quality_time(frame.state->reference, frame.owner,
@@ -209,11 +227,11 @@ void end_frame(float* output) {
         frame.state->mouth_filter.threshold_samples = load<uint32_t>(frame.owner, 0x10c);
 #ifdef PICOET_MOUTH_STOCK_STEP
         output[53] = process_mouth_step(frame.state->mouth_filter, frame.mouth_raw,
-                                       frame.timing.source_ns[2], output);
+                                       frame.timing.source_ns[2], output, config);
         const bool reset = preserve_mouth_quality_reset(frame.state->reference, plugin, frame.owner, frame.raw);
 #else
         output[53] = process_mouth_dt(frame.state->mouth_filter, frame.mouth_raw,
-                                     frame.timing.source_ns[2], output);
+                                     frame.timing.source_ns[2], output, config);
         const bool reset = preserve_mouth_quality_reset_time(frame.state->reference, plugin,
             frame.owner, frame.raw, frame.timing.source_ns[2]);
 #endif
@@ -224,7 +242,8 @@ void end_frame(float* output) {
         if (mf.diagnostics.update == SourceUpdate::Updated)
             mouthlink::offer_stock(frame.timing.source_ns[2], frame.mouth_raw, mf.instant,
                                    mf.previous, output[53] > 0.5f, mf.diagnostics.warmup,
-                                   static_cast<int8_t>(mf.diagnostics.classification));
+                                   static_cast<int8_t>(mf.diagnostics.classification),
+                                   mouth_processing_custom());
     } else if (frame.timing.slow) output[53] = 0.0f;
     std::memcpy(frame.final, output, sizeof(frame.final));
     for (unsigned i = 0; i < 2; ++i)
