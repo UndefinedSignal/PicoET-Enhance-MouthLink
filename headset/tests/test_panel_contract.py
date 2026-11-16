@@ -18,6 +18,21 @@ class RootlessPanelContract(unittest.TestCase):
                 with self.subTest(path=path, forbidden=forbidden):
                     self.assertNotIn(forbidden, source)
 
+    def test_release_separates_host_checks_from_android_without_visual_studio(self):
+        workflow = (ROOT/'.github/workflows/release.yml').read_text(encoding='utf-8')
+        native = re.search(r'(?ms)^  test-native:\n(.*?)(?=^  build:)', workflow)[1]
+        build = re.search(r'(?ms)^  build:\n(.*?)(?=^  publish:)', workflow)[1]
+        self.assertIn('runs-on: ubuntu-24.04', native)
+        self.assertIn('-DCMAKE_BUILD_TYPE=Release', native)
+        self.assertIn('./artifacts/host-tests/postprocessing_test ', native)
+        self.assertIn('ctest --test-dir artifacts/host-tests --output-on-failure', native)
+        self.assertIn('needs: test-native', build)
+        self.assertIn('./hook/build-hook.ps1', build)
+        self.assertIn('-Ndk "$env:ANDROID_HOME/ndk/26.1.10909125"', build)
+        self.assertIn('-CmakeBin "$env:ANDROID_HOME/cmake/3.22.1/bin"', build)
+        self.assertNotIn('Visual Studio', workflow)
+        self.assertNotIn('postprocessing_test.exe', workflow)
+
     def test_bilingual_resources_match(self):
         values = []
         for directory in ('values', 'values-zh'):
@@ -134,6 +149,29 @@ class RootlessPanelContract(unittest.TestCase):
         self.assertNotIn('request(', edited)
         self.assertEqual(re.findall(r'request\("(\w+)"\)', source), ['read', 'write', 'apply'])
         self.assertIn('setOnClickListener(v -> replaceDraft(action))', source)
+
+    def test_fine_arrows_change_the_draft_without_slider_quantization(self):
+        source = (SOURCE/'MainActivity.java').read_text()
+        arrows = re.search(r'private Button fineButton\(.*?\) \{(.*?)\n    \}', source, re.S)[1]
+        for required in ('control(button(', '".decrease"', '".increase"', 'setContentDescription(',
+                         '"fine_decrease"', '"fine_increase"', 'field.nudge(current, direction)',
+                         'if (next == current) return', 'state.draft.set(field.key, next)', 'edited()',
+                         'message(s("blink_order"), true)'):
+            self.assertIn(required, arrows)
+        for forbidden in ('request(', '.progress(', '.value(', '.saved', '.applied'):
+            self.assertNotIn(forbidden, arrows)
+        fields = re.search(r'private void fieldControl\(.*?\) \{(.*?)\n    \}', source, re.S)[1]
+        self.assertIn('fineButton(field, -1)', fields)
+        self.assertIn('fineButton(field, 1)', fields)
+        self.assertEqual(fields.count('new LinearLayout.LayoutParams(dp(48), dp(48))'), 2)
+        self.assertIn('adjustments.setAlpha(alpha)', fields)
+        controls = re.search(r'private void refreshControls\(\) \{(.*?)\n    \}', source, re.S)[1]
+        self.assertIn('for (View v : formControls) v.setEnabled(!busy && state.ready())', controls)
+        for directory in ('values', 'values-zh'):
+            resources = self.resources(directory)
+            for name in ('fine_decrease', 'fine_increase'):
+                self.assertIn('{0}', resources[name])
+                self.assertIn('{1}', resources[name])
 
     def test_literal_percentages_are_not_android_format_substitutions(self):
         for path in (ROOT/'headset/res').rglob('*.xml'):

@@ -14,8 +14,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test-native:
+    name: Check native presets and response
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check native presets and response
+        run: |
+          cmake -S hook/tests -B artifacts/host-tests -DCMAKE_BUILD_TYPE=Release
+          cmake --build artifacts/host-tests --parallel 2
+          ./artifacts/host-tests/postprocessing_test magisk-picoet-enhance/postprocessing-default.conf magisk-picoet-enhance/postprocessing-balanced.conf magisk-picoet-enhance/postprocessing-responsive.conf magisk-picoet-enhance/postprocessing-raw.conf
+          ctest --test-dir artifacts/host-tests --output-on-failure
+
   build:
     name: Build Magisk module
+    needs: test-native
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
