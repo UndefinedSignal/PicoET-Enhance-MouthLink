@@ -343,14 +343,18 @@ int main(int argc, char** argv) {
         const auto st = receive();
         check(st.size() == 424 && st[2] == 5, "STOCK bit 2: custom mouth postprocessing");
     }
-    // A burst larger than the queue keeps the freshest records and never blocks.
+    // A burst larger than the queue never blocks: an overflowing queue keeps the
+    // freshest records, and an offer that meets the sender holding the queue lock is
+    // dropped (trylock) instead of waiting. The next record after the burst arrives.
     for (int i = 0; i < 100; ++i) mouthlink::offer_stock(1000 + i, raw, inst, fin, false, false, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    mouthlink::offer_stock(2000, raw, inst, fin, false, false, 0);
     {
         size_t got = 0; uint64_t last = 0;
         for (auto st = receive(300); !st.empty(); st = receive(300)) {
             if (st[0] == 0x08) { ++got; last = load<uint64_t>(st.data(), 8); }
         }
-        check(got >= 32 && last == 1099, "STOCK burst keeps freshest");
+        check(got >= 2 && got <= 101 && last == 2000, "STOCK burst never blocks, next record arrives");
     }
     subscribe(reply_port, 0, 0, 0, 0, 0, -1); // legacy SUBSCRIBE turns STOCK off
     mouthlink::offer_stock(5000, raw, inst, fin, true, false, 1);
