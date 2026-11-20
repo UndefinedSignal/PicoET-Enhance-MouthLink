@@ -2,6 +2,38 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
+## [2.6.0-ml5] - 2026-11-20
+
+Fork release (PicoET-Enhance-MouthLink): upstream 2.6.0 (LAN camera broadcast and PC Studio) plus MouthLink ml5. With MouthLink off (the default) the module behaves exactly like upstream 2.6.0.
+
+### Features
+- Merged upstream 2.6.0. MouthLink and the LAN broadcast are independent: MouthLink sends raw GRAY8 over UDP 9040/9041 from the expression hook, LAN broadcast sends JPEG over TCP 45681–45683 from its own camera source. Either, both or neither may run.
+- PC Studio in this fork checks this fork's releases for updates (`UndefinedSignal/PicoET-Enhance-MouthLink`), so following its update link keeps MouthLink. Its version is `2.6.0-ml5`.
+
+### Notes & Caveats
+- `versionCode` is 29. MouthLink capture, protocol, allow list and STOCK labels are unchanged from 2.5.1-ml5; the expression hook still takes the mouth source time from the same field (sensor timestamp at input offset 0x108).
+- The MouthLink host test no longer depends on thread timing in its STOCK burst case.
+
+## [2.6.0] - 2026-11-20
+
+### Features
+- Add LAN broadcast: the headset serves the mouth, left-eye and right-eye cameras as independent streams, announces them by broadcast/multicast, and answers standard HTTP MJPEG clients. The protocol, discovery and result formats are in `CAMERA-PROTOCOL.md`.
+- Add a master switch, service status and per-camera addresses and client counts to the companion app. The home screen has two tabs, **LAN broadcast** and **Post-processing**, keeping the complete tuning panel, drafts, presets, language and save/apply behavior unchanged.
+- Add two independent, default-off result switches: **Mouth** (PSL1) and **Both eyes** (PSE1, carrying each eye's stages, validity and inference timestamps). Turning one off disconnects only that result stream.
+- Add PC Studio (`pc-studio/`), a Windows app for LAN camera forwarding and preview: headset discovery, camera preview switching across mouth, left eye and right eye with MJPEG URLs, a dual-eye relay to Cymple's native UDP input, an in-app GitHub Releases update checker, and windowless app-mode launch with single-instance reuse. Releases attach both a user-scope Windows installer (`PicoET-PC-Studio-Setup-v<version>.exe`) and a standalone portable archive (`picoet-pc-studio-v<version>.zip`).
+- Share one native tracking lease for the union of camera and result subscribers, and release it when the last consumer leaves. Serve JPEG and standard MJPEG subscribers with one encode per source frame and independent, bounded latest-frame delivery.
+
+### Design Rationale
+- The companion app stays rootless and without network permission. Camera control and tuning use separate mailboxes handled by the same module worker, so navigation cannot overwrite an in-flight request.
+- Sharing defaults off and remembers an explicit choice. Closing the app leaves the service available, but cameras run only while clients are subscribed. Turning sharing off drains every stream and reuses the existing ownership, nonce and join acknowledgements, without restarting tracking.
+- PC Studio only forwards and previews. It has no model or training dependencies, so it installs in seconds and runs on any Windows PC on the same network.
+- The camera sources live in `camera-source/` and the PC app in `pc-studio/`.
+
+### Notes & Caveats
+- `versionCode` is 28, above the 2.6.0 development builds used for testing. Update the APK and the module backend together.
+- LAN images are unencrypted and unauthenticated; use them on trusted private networks only. Close other eye/face clients once before the first attachment so the adapter can initialize while tracking is idle. Retire any separately started development adapter before using the module switch.
+- Processing settings and stock defaults are unchanged.
+
 ## [2.5.2-ml5] - 2026-11-16
 
 Fork release (PicoET-Enhance-MouthLink): upstream 2.5.2 plus MouthLink ml5. With MouthLink off (the default) the module behaves exactly like upstream 2.5.2.

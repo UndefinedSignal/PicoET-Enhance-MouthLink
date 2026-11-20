@@ -3,7 +3,7 @@
 [English](README.md) | 简体中文
 
 > **本仓库是 [WolalaQAQ/PicoET-Enhance](https://github.com/WolalaQAQ/PicoET-Enhance) 的分支**
-> （`mouthlink` 分支，模块版本 `2.5.2-ml5`）：在上游 v2.5.2 基础上增加可选的 **MouthLink**
+> （`mouthlink` 分支，模块版本 `2.6.0-ml5`）：在上游 v2.6.0 基础上增加可选的 **MouthLink**
 > 嘴部摄像头数据流（400×400 红外，90 Hz，经 UDP 发送到 PC）以及逐帧原厂嘴部数值标签，
 > 用于训练自定义嘴部追踪模型。默认关闭；眼动追踪与原厂嘴部输出保持不变。
 > 默认只允许私有网络中的 PC 订阅，可用 `picoet.sh mouthlink-allow <PC-IP>` 限定为本机，
@@ -13,7 +13,7 @@
 
 面向 PICO 4 Pro 的眼动增强 Magisk 模块：打开眼动服务的逐眼门控以输出真实瞳孔数据，解除面部表情模型的跨眼耦合让左右眼各自计算，并把眼部与嘴部表情目标频率从原厂约 24 Hz 提高到默认 90/90 Hz。配合 [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) 和 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) 使用。
 
-> v2.5.2 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
+> v2.6.0 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
 
 ## 它做什么
 
@@ -77,8 +77,8 @@ Windows 11 可能会忽略官方宿主申请的 1 ms 定时器精度，这时每
 2. 在 Magisk App 中通过“从本地安装”刷入，或使用命令行：
 
    ```sh
-    adb push magisk-picoet-enhance-v2.5.2.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.5.2.zip'
+    adb push magisk-picoet-enhance-v2.6.0.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.0.zip'
    ```
 
 3. 重启头显。
@@ -86,6 +86,12 @@ Windows 11 可能会忽略官方宿主申请的 1 ms 定时器精度，这时每
 首次安装默认启用增强模式 `dual/on`，重启后以 90/90 Hz 运行。如果升级前已切到普通模式，升级后仍保持关闭。
 
 ## 使用
+
+从应用库打开 **PicoET-Enhance**。**局域网广播** 标签页显示总开关、服务状态和三路相机的地址及客户端数量。**后处理** 标签页直接显示完整参数面板，头显宽屏下仍从左侧选择要调的内容。
+
+**结果共享** 分别控制 **嘴部** 追踪数值和 **双眼** [表情数值](CAMERA-PROTOCOL.md#eye-expression-results-pse1)的订阅权限，两项默认关闭，不影响图像或 Facial Bridge。
+
+相机共享默认关闭并记住选择。开启后，局域网客户端可自动发现并独立订阅三路图像；有人订阅才启动相机，关闭会断开全部传输，退出GUI不影响后台。首次开启需先关闭其他眼追、面捕客户端一次，以便空闲附加适配器。图像为明文、无认证，仅在可信私网使用。开关不改变后处理参数，普通表情转发仍走Bridge。PC 端查看工具见[局域网广播与 PC Studio](#局域网广播与-pc-studio)。
 
 在头显上以 Root 运行：
 
@@ -139,6 +145,8 @@ sh /data/adb/modules/picoet-enhance/picoet.sh status
 
 ### 头显端后处理配置
 
+从应用首页进入 **参数调节**；以下的「开始」、动作清单及保存／应用均位于该独立面板。
+
 PICO原厂会在表情模型输出之后做一系列后处理：眉部曲线与联动、Blink端点补齐、自适应／复合／Kalman滤波、嘴部基线扣除、log压缩、伸舌门槛与平滑等。这些处理原本参数固定。从2.5.0起，本模块把其中44个参数开放为配置项，默认值就是原厂值；处理算法本身仍是原厂的。
 
 模块附带独立的 **PicoET-Enhance** 设置应用，安装模块并重启后从头显应用库打开，卸载模块并重启后随模块一起移除。「开始」页提供四个预设；左侧列出15个可以照镜子检查的动作，例如眨眼、抬眉、说话。每个动作页画出模型给出的值和Avatar收到的值，写明这个动作常见的问题和该拖哪个滑杆，旁边是影响它的设置，拖动时图会重新计算。图中动作按每秒90次更新的固定条件计算，用于比较设置。「全部设置」按处理顺序列出全部44项。顶部可在「简单」和「专业」两种说明之间切换，专业说明给出变量、公式和计算条件，切换不改变任何设置。拖动滑块粗调，点击两侧的◀／▶单步微调；点击数值可精确输入或恢复单项默认，不需要编辑配置文本。面板和PicoFacialBridge均免Root：面板从自己的Android私有目录提交固定请求，由模块后台执行。VRCFT模块只处理PC端数据。
@@ -159,6 +167,26 @@ sh "$MOD/picoet.sh" reload-processing
 ```
 
 修改在下一次载荷启动时读取，重装／升级保留配置。要采用更新后的预设，需重新选择该预设，再保存、应用。非法参数、重复或未知字段拒绝保存；启动时发现文件损坏或权限不符，会报告失败而非默默恢复滤波。无配置文件保持原有行为。头显原生数值、面板开机集成及免Root通信的保存／应用／恢复已在PICO 4 Pro／PICO OS 5.13.7／SELinux Enforcing下验证；佩戴响应与噪声仍待比较。
+
+## 局域网广播与 PC Studio
+
+开启局域网广播后，头显把嘴部、左眼、右眼三路相机作为普通 MJPEG 流提供（默认端口 45681、45682、45683），并广播自己以便发现。传输格式、发现和结果消息见 [CAMERA-PROTOCOL.md](CAMERA-PROTOCOL.md)。
+
+[pc-studio](pc-studio) 里的 PC Studio 是用来转发和预览这些流的 Windows 应用。可从 [Releases](https://github.com/WolalaQAQ/PicoET-Enhance/releases) 下载安装程序 `PicoET-PC-Studio-Setup-v<版本>.exe`（默认安装到用户目录 `%LOCALAPPDATA%\Programs\PicoET PC Studio`，无需管理员权限，创建开始菜单快捷方式并以 Edge/Chrome 独立应用窗口启动），或解压绿色包 `picoet-pc-studio-v<版本>.zip` 直接运行 `PicoET-PC-Studio.exe`。也可以在装有 Python 3 和 Pillow 的环境中直接从源码启动：
+
+```powershell
+pip install -r pc-studio/requirements.txt
+pc-studio\start.cmd          # 打开 http://127.0.0.1:8787
+```
+
+功能：
+
+- 在局域网内发现头显，或手动填写地址；
+- 切换实时预览嘴部、左眼或右眼相机画面，并显示当前流的 MJPEG 地址（`http://<头显地址>:<端口>/stream.mjpg`）供其他工具使用；
+- 眼部转发：把左右眼流的 PTJ1 数据送入 Cymple 的原生 UDP 输入（`127.0.0.1:23303`），支持独立端口与画面旋转／镜像；
+- 应用内版本更新检测（自动或手动查询 GitHub Releases，直接展示新版安装包与头显模块下载链接）以及一键退出后台服务按钮。
+
+`python pc-studio/check.py` 运行它的测试，`python pc-studio/package_release.py` 构建独立可执行包、绿色 ZIP 和 Inno Setup 安装程序。
 
 ## 关于企业版门控
 
@@ -192,6 +220,7 @@ sh "$MOD/picoet.sh" reload-processing
 
 ```powershell
 pwsh -File hook\build-hook.ps1                 # 构建 injector 与 payload
+python camera-source/build.py android --ndk "$env:ANDROID_HOME/ndk/26.1.10909125" --cmake "$env:ANDROID_HOME/cmake/3.22.1/bin/cmake.exe" --ninja "$env:ANDROID_HOME/cmake/3.22.1/bin/ninja.exe"
 pwsh -File build-picoet-enhance.ps1 -Python python # 构建面板并打包 Magisk zip
 ```
 
@@ -209,6 +238,16 @@ pwsh -File build-picoet-enhance.ps1 -Python python # 构建面板并打包 Magis
 ## 反馈
 
 欢迎提交 Issue。请提供头显型号、PICO OS 版本、模块版本、当前模式，以及 `picoet.sh status` 的输出与相关日志片段。
+
+## 社区
+
+使用求助、交流和版本更新通知，欢迎加入 Pico-Enhance 社区。
+
+<a href="https://discord.gg/ueSEydeVD8"><img src="https://img.shields.io/badge/Discord-Join%20Pico--Enhance-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="加入 Pico-Enhance Discord"></a>
+
+**QQ 群：** 1129699813，用 QQ 扫描下方二维码即可加入。
+
+<img src="assets/community/qq-group-qr.png" alt="Pico-Enhance QQ 群二维码" width="240">
 
 ## 许可证
 

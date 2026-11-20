@@ -173,6 +173,7 @@ float process(MouthState& state, const float raw35[kMouthRawChannels],
     float mouth[kMouthChannels];
     postprocess(state, raw35, diagnostics.ratio, mouth, config);
     for (unsigned i = 0; i < kMouthChannels; ++i) {
+        state.instant_preclamp[i] = mouth[i];
         float value = clamp01(mouth[i]);
         state.instant[i] = value;
         const unsigned slot = slots[i];
