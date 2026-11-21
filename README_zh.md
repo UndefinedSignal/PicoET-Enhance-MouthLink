@@ -3,7 +3,7 @@
 [English](README.md) | 简体中文
 
 > **本仓库是 [WolalaQAQ/PicoET-Enhance](https://github.com/WolalaQAQ/PicoET-Enhance) 的分支**
-> （`mouthlink` 分支，模块版本 `2.6.0-ml5`）：在上游 v2.6.0 基础上增加可选的 **MouthLink**
+> （`mouthlink` 分支，模块版本 `2.6.1-ml5`）：在上游 v2.6.1 基础上增加可选的 **MouthLink**
 > 嘴部摄像头数据流（400×400 红外，90 Hz，经 UDP 发送到 PC）以及逐帧原厂嘴部数值标签，
 > 用于训练自定义嘴部追踪模型。默认关闭；眼动追踪与原厂嘴部输出保持不变。
 > 默认只允许私有网络中的 PC 订阅，可用 `picoet.sh mouthlink-allow <PC-IP>` 限定为本机，
@@ -13,7 +13,7 @@
 
 面向 PICO 4 Pro 的眼动增强 Magisk 模块：打开眼动服务的逐眼门控以输出真实瞳孔数据，解除面部表情模型的跨眼耦合让左右眼各自计算，并把眼部与嘴部表情目标频率从原厂约 24 Hz 提高到默认 90/90 Hz。配合 [PicoFacialBridge](https://github.com/WolalaQAQ/PicoFacialBridge) 和 [UnifiedPicoModule](https://github.com/WolalaQAQ/UnifiedPicoModule) 使用。
 
-> v2.6.0 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
+> v2.6.1 · PICO 4 Pro / PICO OS 5.13.7 · [更新日志](CHANGELOG_zh.md)
 
 ## 它做什么
 
@@ -77,8 +77,8 @@ Windows 11 可能会忽略官方宿主申请的 1 ms 定时器精度，这时每
 2. 在 Magisk App 中通过“从本地安装”刷入，或使用命令行：
 
    ```sh
-    adb push magisk-picoet-enhance-v2.6.0.zip /data/local/tmp/
-    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.0.zip'
+    adb push magisk-picoet-enhance-v2.6.1.zip /data/local/tmp/
+    adb shell su -c 'magisk --install-module /data/local/tmp/magisk-picoet-enhance-v2.6.1.zip'
    ```
 
 3. 重启头显。

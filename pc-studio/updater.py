@@ -6,7 +6,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-APP_VERSION = '2.6.0-ml5'
+APP_VERSION = '2.6.1-ml5'
 # Fork: updates come from this fork's releases, so a module update keeps MouthLink.
 GITHUB_REPO = 'UndefinedSignal/PicoET-Enhance-MouthLink'
 RELEASES_LATEST_API = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'

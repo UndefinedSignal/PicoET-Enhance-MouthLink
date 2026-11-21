@@ -20,6 +20,9 @@ struct PTJSource {
     AtomicStats local[PTJ_STREAMS];
     std::mutex stop_mutex;
     bool stopped = false;
+    int last_reported_alive = -1;
+    uint32_t last_reported_stage = None;
+    int last_reported_code = 0;
 };
 namespace {
 std::atomic<bool> failed_unacked{false};
@@ -60,7 +63,7 @@ void peer_error(PTJSource& s, uint32_t stage, int code) {
 }
 bool heartbeat(const Channel& c) {
     const uint64_t beat = c.daemon_heartbeat.load(std::memory_order_acquire), now = mono_ns();
-    return beat && now >= beat && now - beat <= HEARTBEAT_NS;
+    return beat && (now >= beat ? now - beat <= HEARTBEAT_NS : beat - now <= HEARTBEAT_NS);
 }
 bool owner_matches(const PTJSource& s) {
     const Channel& c = *s.channel;
@@ -99,7 +102,16 @@ bool peer(PTJSource& s) {
     if (!s.peer_alive) return false;
     if (!owner_matches(s) || !request_matches(s)) { peer_error(s, OwnerEcho, EPROTO); return false; }
     if (!attach_matches(s)) { peer_error(s, AttachNonce, EPROTO); return false; }
-    if (!heartbeat(c)) { peer_error(s, Heartbeat, ETIMEDOUT); return false; }
+    if (!heartbeat(c)) {
+        // Transient suspend/wakeup heartbeat lag pauses submissions without permanently latching the channel.
+        uint32_t none = None;
+        if (s.error_stage.compare_exchange_strong(none, Heartbeat, std::memory_order_acq_rel))
+            s.error_code.store(uint32_t(ETIMEDOUT), std::memory_order_release);
+        return false;
+    }
+    uint32_t hb = Heartbeat;
+    if (s.error_stage.compare_exchange_strong(hb, None, std::memory_order_acq_rel))
+        s.error_code.store(0, std::memory_order_release);
     return true;
 }
 void transport_snapshot(PTJSource& s, uint32_t stream) {
@@ -308,7 +320,15 @@ extern "C" int ptj_get_stream_stats(const PTJSource* source, uint32_t stream, PT
         local.running = alive && c.state == Ready && !c.stop_request;
         local.connected = local.running ? c.images[stream].core.connected.load() : 0;
         local.queue_in_use = c.images[stream].in_use.load();
-        report(s.root, alive ? "attached" : "peer_failed", s.error_stage, int(s.error_code), &s);
+        const int alive_flag = alive ? 1 : 0;
+        const uint32_t stage = s.error_stage.load(std::memory_order_acquire);
+        const int code = int(s.error_code.load(std::memory_order_acquire));
+        if (alive_flag != s.last_reported_alive || stage != s.last_reported_stage || code != s.last_reported_code) {
+            s.last_reported_alive = alive_flag;
+            s.last_reported_stage = stage;
+            s.last_reported_code = code;
+            report(s.root, alive ? "attached" : "peer_failed", stage, code, &s);
+        }
     }
     *out = load_stats(local); return 0;
 }
