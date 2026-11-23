@@ -28,6 +28,7 @@ __attribute__((visibility("default"))) unsigned long long picoet_gate_calls = 0;
 __attribute__((visibility("default"))) unsigned long long picoet_gate_installed = 0;
 __attribute__((visibility("default"))) unsigned long long picoet_plugin_base = 0;
 __attribute__((visibility("default"))) unsigned long long picoet_dual_installed = 0;
+__attribute__((visibility("default"))) unsigned long long picoet_mouthled_installed = 0;
 }
 
 namespace {
@@ -43,6 +44,13 @@ constexpr const char kMouthLinkFile[] = "/data/local/tmp/picoet-mouthlink";
 constexpr const char kMouthLinkPortFile[] = "/data/local/tmp/picoet-mouthlink-port";
 constexpr const char kMouthLinkAllowFile[] = "/data/local/tmp/picoet-mouthlink-allow";
 constexpr const char kHookLog[] = "/data/local/tmp/picoet-hook.log";
+// Mouth IR switch (ml6). The stock camera library only stores the face LED brightness here;
+// PvrEyeCameraBase::writeLedNode later writes it to the AW210xx brightness registers 0x46-0x48
+// on every camera open. The eye LEDs use separate registers (0x49-0x4e) and stay untouched.
+constexpr const char kMouthLedFile[] = "/data/local/tmp/picoet-mouthled";
+constexpr const char kCameraLibSoname[] = "libpxreyetrackingcamera.so";
+constexpr uint64_t kCameraFnv1a64 = 0x6A82C9CA3F940755ULL;
+constexpr const char kFaceLedSym[] = "_ZN3pvr16PvrEyeCameraBase20setFaceLedBrightnessEh";
 constexpr const char kPluginSoname[] = "libpxreyetracking.phoenix.so";
 constexpr uint64_t kPluginMinLoadBytes = 0x34279c;
 constexpr size_t kOffInfer = 0x613e0, kOffTrackor = 0x625b4, kOffOwnerInit = 0x60998;
@@ -105,10 +113,11 @@ unsigned long long process_start_ticks()
     unsigned long long ticks = strtoull(p, &end, 10);
     return errno || end == p || *end != ' ' ? 0 : ticks;
 }
-int publish_record(const char* name, const char* record, size_t len)
+int publish_record(const char* name, const char* record, size_t len, const char* tmp_suffix = "tmp")
 {
+    // Writers on other threads must use their own suffix: the temp name is per process.
     char tmp[64];
-    snprintf(tmp, sizeof(tmp), "%ld.tmp", (long)getpid());
+    snprintf(tmp, sizeof(tmp), "%ld.%s", (long)getpid(), tmp_suffix);
     int dir = picoet_open_runtime();
     if (dir < 0) return -1;
     int fd = picoet_root_file(openat(dir, tmp,
@@ -259,6 +268,67 @@ int install_gate_hook()
     __atomic_store_n(&picoet_gate_installed, 1, __ATOMIC_RELEASE);
     append_log("P1 gate hook installed (isBusinessDev -> 1)");
     return 0;
+}
+// ---- mouth IR switch (ml6) ---------------------------------------------------
+// The setting is re-read on every call, so `picoet.sh mouthled-off|on` applies at the next
+// camera open without restarting tracking. Absent or "on" passes the stock value through.
+using FaceLedFn = void (*)(void*, unsigned char);
+// ShadowHook stores the trampoline here before the patch goes live, so a camera thread
+// entering the proxy during installation always finds it.
+void* g_face_led_orig = nullptr;
+int read_mouthled_off()
+{
+    int fd = picoet_open_root_file(kMouthLedFile, O_RDONLY, 0);
+    if (fd < 0) return 0;
+    char buf[16];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    return strncmp(buf, "off", 3) == 0;
+}
+void my_setFaceLedBrightness(void* self, unsigned char requested)
+{
+    static std::atomic<unsigned> calls {0};
+    static std::atomic<int> last_applied {-1};
+    const unsigned char applied = read_mouthled_off() ? 0 : requested;
+    const unsigned n = calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (last_applied.exchange(applied, std::memory_order_relaxed) != applied || n <= 2)
+        log_fmt("mouth IR: setFaceLedBrightness requested=%u applied=%u (call #%u)", requested, applied, n);
+    char record[48];
+    int len = snprintf(record, sizeof(record), "requested=%u\napplied=%u\n", requested, applied);
+    if (len > 0 && static_cast<size_t>(len) < sizeof(record)) publish_record("mouthled", record, static_cast<size_t>(len), "mouthled.tmp");
+    reinterpret_cast<FaceLedFn>(__atomic_load_n(&g_face_led_orig, __ATOMIC_ACQUIRE))(self, applied);
+}
+int camera_lib_cb(struct dl_phdr_info* info, size_t, void* opaque)
+{
+    if (!info->dlpi_name || !info->dlpi_name[0]) return 0;
+    const char* bn = strrchr(info->dlpi_name, '/');
+    bn = bn ? bn + 1 : info->dlpi_name;
+    if (strcmp(bn, kCameraLibSoname) != 0) return 0;
+    *static_cast<const char**>(opaque) = info->dlpi_name;
+    return 1;
+}
+// Optional and isolated: any failure leaves the stock LED behaviour and all other hooks intact.
+void install_mouthled_hook()
+{
+    const char* path = nullptr;
+    dl_iterate_phdr(camera_lib_cb, &path);
+    if (!path) { append_log("mouth IR: camera library not loaded; switch unavailable"); return; }
+    uint64_t h = 0;
+    if (fnv1a64_file(path, &h) != 0) { log_fmt("mouth IR: cannot read %s; switch unavailable", path); return; }
+    if (h != kCameraFnv1a64) {
+        log_fmt("mouth IR guard: camera lib hash 0x%016llX != known; switch unavailable", (unsigned long long)h);
+        return;
+    }
+    void* stub = shadowhook_hook_sym_name(kCameraLibSoname, kFaceLedSym, (void*)my_setFaceLedBrightness,
+                                          &g_face_led_orig);
+    if (!stub || !__atomic_load_n(&g_face_led_orig, __ATOMIC_ACQUIRE)) {
+        log_fmt("mouth IR: hook failed errno=%d; switch unavailable", shadowhook_get_errno());
+        return;
+    }
+    __atomic_store_n(&picoet_mouthled_installed, 1, __ATOMIC_RELEASE);
+    log_fmt("mouth IR hook installed (setting=%s)", read_mouthled_off() ? "off" : "on");
 }
 int phoenix_cb(struct dl_phdr_info* info, size_t, void* opaque)
 {
@@ -905,6 +975,7 @@ __attribute__((constructor)) void picoet_init()
         report_runtime("failed");
         return;
     }
+    install_mouthled_hook();
     if (!g_enhanced_mode) { report_runtime("ready"); return; }
     report_runtime("pending");
     void* b = find_phoenix();

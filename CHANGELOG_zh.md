@@ -2,6 +2,23 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## [2.6.1-ml6] - 2026-11-23
+
+> 本节由 AI 翻译自英文版，如有出入以英文为准。
+
+分支版本（PicoET-Enhance-MouthLink）：在 2.6.1-ml5 基础上增加嘴部摄像头红外补光灯开关。
+
+### 新功能
+- `picoet.sh mouthled-off` 关闭 PICO 嘴部摄像头的红外补光灯，眼动追踪及其补光灯照常工作；`picoet.sh mouthled-on` 恢复。用于外置红外嘴部追踪器（Project Babble 及其仿制品），其摄像头会拍到 PICO 补光灯的闪烁并误判为嘴部动作。
+- 原理：原厂 `PvrEyeCameraBase::setFaceLedBrightness`（libpxreyetrackingcamera.so）只保存脸部补光亮度，`writeLedNode` 在每次打开摄像头时把它写入 AW210xx 驱动的寄存器 0x46–0x48。载荷按导出符号挂钩该函数，开关关闭时传入 0。眼部补光使用寄存器 0x49–0x4e，不受影响。
+- `mouthled-off` 同时立即向这些寄存器写 0，无需重启追踪或重新佩戴头显。`mouthled-on` 不会从 shell 提高亮度：原厂亮度（PICO OS 5.13.3S/5.13.7 上为 40）在下次打开摄像头时恢复。
+
+### 说明与注意事项
+- 设置保存在 `/data/local/tmp/picoet-mouthled`（`on`/`off`，默认 `on`），每次打开摄像头时读取；不存在或为 `on` 时原样传递原厂数值。
+- 以 libpxreyetrackingcamera.so 的 FNV-1a64 哈希（`0x6A82C9CA3F940755`）作为保护，其他版本会跳过并记录日志。
+- 开关关闭时 PICO 自身的面部追踪只能看到暗画面；录制带 STOCK 标签的 MouthLink 数据前请先打开。
+- `versionCode` 为 31。
+
 ## [2.6.1-ml5] - 2026-11-21
 
 分支版本（PicoET-Enhance-MouthLink）：上游 2.6.1 加上 MouthLink ml5。MouthLink 关闭时（默认）行为与上游 2.6.1 完全一致。

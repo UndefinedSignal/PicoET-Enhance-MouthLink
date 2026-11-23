@@ -3,7 +3,7 @@
 English | [简体中文](README_zh.md)
 
 > **This is a fork of [WolalaQAQ/PicoET-Enhance](https://github.com/WolalaQAQ/PicoET-Enhance)**
-> (branch `mouthlink`, module version `2.6.1-ml5`): upstream v2.6.1 plus an opt-in
+> (branch `mouthlink`, module version `2.6.1-ml6`): upstream v2.6.1 plus an opt-in
 > **MouthLink** source for custom mouth tracking.
 >
 > - Raw mouth-camera stream (400×400 IR, 90 Hz) to a PC over UDP, captured inside the
@@ -13,6 +13,8 @@ English | [简体中文](README_zh.md)
 > - Disabled by default. Eye tracking and stock mouth output are unchanged.
 > - Only private-network PCs may subscribe by default; an allow list narrows it to your PC,
 >   and a running stream cannot be taken over by another address (ml4).
+> - A switch that keeps the PICO mouth camera's IR LEDs dark for external mouth trackers,
+>   with eye tracking unchanged (ml6, [Mouth IR switch](#mouth-ir-switch-for-external-mouth-trackers-ml6)).
 >
 > The PC side (receiver, recording, dataset builder, training) is
 > [MouthLink](https://github.com/UndefinedSignal/MouthLink). Details:
@@ -210,6 +212,19 @@ adb shell su -c 'sh /data/adb/modules/picoet-enhance/picoet.sh status'
 ```
 
 Then run `MouthLink.Receiver --host <headset-IP>` on the PC and open its viewer (by default `http://localhost:8080/`). Use `mouthlink-off --force` to disable the source. The control port defaults to UDP 9040 and can be changed only before service startup with `/data/local/tmp/picoet-mouthlink-port`.
+
+### Mouth IR switch for external mouth trackers (ml6)
+
+An external IR mouth tracker (Project Babble and its clones) sees the PICO mouth camera's IR LEDs flash on the lips and nose, and its model turns the flashing into phantom mouth movement. Turning PICO face tracking off in the system menu does not help while a client such as PicoFacialBridge holds the tracking service: the camera keeps running and keeps its LEDs on.
+
+```sh
+adb shell su -c 'sh /data/adb/modules/picoet-enhance/picoet.sh mouthled-off'
+adb shell su -c 'sh /data/adb/modules/picoet-enhance/picoet.sh mouthled-on'
+```
+
+`mouthled-off` sets the face LED brightness to 0 at once and keeps it there on every later camera open; eye tracking and the eye LEDs are not touched, and tracking is not restarted. `mouthled-on` restores the stock brightness at the next camera open (take the headset off and put it on again). The setting survives reboots. While it is off, PICO's own mouth output sees a dark image, so take the mouth from the external tracker (for UnifiedPicoModule, set `DisableFaceTracking`), and turn it back on before recording MouthLink sessions with STOCK labels.
+
+The stock camera library stores the brightness in `PvrEyeCameraBase::setFaceLedBrightness` and writes it to the AW210xx LED driver (registers 0x46–0x48; the eye LEDs are 0x49–0x4e) on every camera open. The payload hooks that exported setter, guarded by the library hash, and passes 0 while the switch is off.
 
 ### Who may subscribe (ml4)
 

@@ -24,6 +24,6 @@ rmdir "$state" 2>/dev/null || true
 rm -f /data/local/tmp/picoet-mode /data/local/tmp/picoet-gate /data/local/tmp/picoet-hook.log
 rm -f /data/local/tmp/picoet-eye-hz /data/local/tmp/picoet-mouth-hz
 rm -f /data/local/tmp/picoet-postprocessing.conf
-rm -f /data/local/tmp/picoet-mouthlink /data/local/tmp/picoet-mouthlink-port /data/local/tmp/picoet-mouthlink-allow
+rm -f /data/local/tmp/picoet-mouthlink /data/local/tmp/picoet-mouthlink-port /data/local/tmp/picoet-mouthlink-allow /data/local/tmp/picoet-mouthled
 resetprop --delete picoet.enhance.mode 2>/dev/null
 resetprop --delete picoet.enhance.gate 2>/dev/null

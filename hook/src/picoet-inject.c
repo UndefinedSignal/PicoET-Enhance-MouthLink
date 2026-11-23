@@ -148,6 +148,13 @@ static int save_mouthlink(const char *mode)
     return save_setting("/data/local/tmp/picoet-mouthlink", !strcmp(mode, "off") ? "off\n" : "on\n");
 }
 
+static int save_mouthled(const char *mode)
+{
+    if (strcmp(mode, "off") && strcmp(mode, "on")) return 2;
+    if (prepare_state()) return 2;
+    return save_setting("/data/local/tmp/picoet-mouthled", !strcmp(mode, "off") ? "off\n" : "on\n");
+}
+
 // MouthLink control allow list: "private", "any", IPv4 addresses / CIDR ranges separated
 // by commas or spaces. Only the character set and length are checked here; the payload
 // parses it at service start and allows nothing if it is malformed.
@@ -1008,7 +1015,7 @@ int main(int argc, char **argv)
     if (argc >= 2 && (!strcmp(argv[1], "--read-file") || !strcmp(argv[1], "--read-log") ||
                       !strcmp(argv[1], "--normalize-mode") ||
                       !strcmp(argv[1], "--save-mode") || !strcmp(argv[1], "--save-mouthlink") ||
-                      !strcmp(argv[1], "--save-mouthlink-allow") ||
+                      !strcmp(argv[1], "--save-mouthlink-allow") || !strcmp(argv[1], "--save-mouthled") ||
                       !strcmp(argv[1], "--prepare-runtime"))) {
         if (geteuid() != 0) return 2;
         if (!strcmp(argv[1], "--read-file") && argc == 3) return read_control_file(argv[2], 0);
@@ -1017,6 +1024,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[1], "--save-mode") && argc == 3) return save_mode(argv[2]);
         if (!strcmp(argv[1], "--save-mouthlink") && argc == 3) return save_mouthlink(argv[2]);
         if (!strcmp(argv[1], "--save-mouthlink-allow") && argc == 3) return save_mouthlink_allow(argv[2]);
+        if (!strcmp(argv[1], "--save-mouthled") && argc == 3) return save_mouthled(argv[2]);
         if (!strcmp(argv[1], "--normalize-mode") && argc == 2) return normalize_mode();
         if (!strcmp(argv[1], "--prepare-runtime") && argc == 2) return prepare_runtime(0);
         if (!strcmp(argv[1], "--prepare-runtime") && argc == 3 && !strcmp(argv[2], "--reset"))

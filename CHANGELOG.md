@@ -2,6 +2,23 @@
 
 English | [简体中文](CHANGELOG_zh.md)
 
+## [2.6.1-ml6] - 2026-11-23
+
+Fork release (PicoET-Enhance-MouthLink): 2.6.1-ml5 plus a switch for the mouth camera's IR LEDs.
+
+### Features
+- `picoet.sh mouthled-off` keeps the PICO mouth camera's IR LEDs dark while eye tracking and its LEDs keep working; `picoet.sh mouthled-on` restores them. Intended for external IR mouth trackers (Project Babble and clones), whose camera picks up the flashing PICO illumination and turns it into phantom mouth movement.
+- How: the stock `PvrEyeCameraBase::setFaceLedBrightness` (libpxreyetrackingcamera.so) only stores the face LED brightness; `writeLedNode` writes it to the AW210xx LED driver registers 0x46–0x48 on every camera open. The payload hooks the setter by its exported symbol and passes 0 while the switch is off. Eye LEDs use registers 0x49–0x4e and are not touched.
+- `mouthled-off` also writes 0 to those registers at once, so no tracking restart or headset re-wear is needed. `mouthled-on` never raises LED output from the shell: the stock brightness (40 on PICO OS 5.13.3S/5.13.7) returns at the next camera open.
+- `picoet.sh status` shows `mouthled=` and the last camera open (`requested=`/`applied=`).
+
+### Notes & Caveats
+- The setting lives in `/data/local/tmp/picoet-mouthled` (`on`/`off`, default `on`) and is read at every camera open. With it absent or `on`, the hook passes the stock value through unchanged.
+- Guarded by the FNV-1a64 hash of libpxreyetrackingcamera.so (`0x6A82C9CA3F940755`). On any other build the hook is skipped and logged; everything else works as before.
+- The hook is installed only when the module injects (`dual` mode); in `off` mode nothing is injected.
+- PICO's own face tracking sees a dark camera while the switch is off, so turn it back on before recording MouthLink sessions with STOCK labels.
+- `versionCode` is 31.
+
 ## [2.6.1-ml5] - 2026-11-21
 
 Fork release (PicoET-Enhance-MouthLink): upstream 2.6.1 plus MouthLink ml5. With MouthLink off (the default) the module behaves exactly like upstream 2.6.1.

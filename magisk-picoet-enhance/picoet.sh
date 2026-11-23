@@ -5,6 +5,7 @@
 #   picoet.sh off|dual|toggle    [--force]      (on is accepted as a synonym for dual)
 #   picoet.sh mouthlink-on|mouthlink-off [--force]  # RAW mouth camera, restart required
 #   picoet.sh mouthlink-allow <list> [--force]       # who may subscribe, restart required
+#   picoet.sh mouthled-off|mouthled-on              # mouth camera IR LEDs, no restart
 #   picoet.sh ensure              # (internal) inject into the running service if needed
 #
 # The enhancement lives only in the eye-tracking service's memory: bin/picoet-inject
@@ -23,6 +24,9 @@
 #   /data/local/tmp/picoet-mouthlink-allow : startup-only control sources: "private" (default:
 #       RFC 1918, link-local, loopback, 100.64/10), "any", or IPv4 addresses / CIDR ranges,
 #       e.g. "192.168.1.10" or "192.168.1.0/24,10.0.0.5". Malformed = nothing allowed.
+#   /data/local/tmp/picoet-mouthled : on|off (default on), mouth camera IR LEDs. Read by the
+#       payload at every camera open; off keeps the face LED brightness at 0 (eye LEDs unchanged),
+#       for use with an external mouth tracker whose camera sees the flashing.
 
 # Magisk may invoke ./action.sh; the injector requires an absolute payload path.
 MODDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P) || exit 1
@@ -33,6 +37,9 @@ GATE_FILE=/data/local/tmp/picoet-gate
 MOUTHLINK_FILE=/data/local/tmp/picoet-mouthlink
 MOUTHLINK_PORT_FILE=/data/local/tmp/picoet-mouthlink-port
 MOUTHLINK_ALLOW_FILE=/data/local/tmp/picoet-mouthlink-allow
+MOUTHLED_FILE=/data/local/tmp/picoet-mouthled
+# AW210xx LED driver node written by the stock camera library; 0x46-0x48 = face LEDs, 0x45 = update.
+LED_REG=/sys/bus/i2c/drivers/aw210xx_led/2-0020/leds/aw210xx_led/reg
 STATE_DIR=/data/adb/picoet-enhance
 RUNTIME_DIR=/data/local/tmp/picoet-runtime
 RECOVERY_USED=$STATE_DIR/recovery.used
@@ -57,6 +64,7 @@ sha() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 # Install/boot initializes dual/on; unexpected runtime mode reads still fail closed.
 saved_mode() { value=$("$BIN" --read-file "$MODE_FILE" 2>/dev/null); case "$value" in off|dual) echo "$value" ;; *) echo off ;; esac; }
 saved_gate() { value=$("$BIN" --read-file "$GATE_FILE" 2>/dev/null); case "$value" in on|off) echo "$value" ;; *) echo on ;; esac; }
+saved_mouthled() { value=$("$BIN" --read-file "$MOUTHLED_FILE" 2>/dev/null); case "$value" in on|off) echo "$value" ;; *) echo on ;; esac; }
 saved_mouthlink() { value=$("$BIN" --read-file "$MOUTHLINK_FILE" 2>/dev/null); case "$value" in on|off) echo "$value" ;; *) echo off ;; esac; }
 mouthlink_port() {
     value=$("$BIN" --read-file "$MOUTHLINK_PORT_FILE" 2>/dev/null)
@@ -409,8 +417,8 @@ restart_and_inject() {
 
 MODE=$1
 case "$MODE" in
-    status|boot|ensure|off|dual|on|toggle|reload-processing|mouthlink-on|mouthlink-off|mouthlink-allow) ;;
-    *) echo "usage: $0 status | off|dual|on|toggle [--force] | reload-processing | mouthlink-on|mouthlink-off [--force] | mouthlink-allow <private|any|IP[/bits],...> [--force] | ensure"; exit 2 ;;
+    status|boot|ensure|off|dual|on|toggle|reload-processing|mouthlink-on|mouthlink-off|mouthlink-allow|mouthled-on|mouthled-off) ;;
+    *) echo "usage: $0 status | off|dual|on|toggle [--force] | reload-processing | mouthlink-on|mouthlink-off [--force] | mouthlink-allow <private|any|IP[/bits],...> [--force] | mouthled-on|mouthled-off | ensure"; exit 2 ;;
 esac
 # `on` is the companion-property spelling; normalize it to the saved `dual` mode.
 [ "$MODE" = on ] && MODE=dual
@@ -431,7 +439,9 @@ case "$MODE" in
         exit 0 ;;
     status)
         runtime_snapshot
-        echo "saved_mode=$(saved_mode) saved_gate=$(saved_gate) injected=$MAPPED service_pid=${RUN_PID:-none} phase=$PHASE applied_mode=$APPLIED_MODE applied_gate=$APPLIED_GATE effective_eye_hz=$EFFECTIVE_EYE_HZ effective_mouth_hz=$EFFECTIVE_MOUTH_HZ mouthlink=$(saved_mouthlink) mouthlink_port=$(mouthlink_port) mouthlink_allow=$(mouthlink_allow) externalfunc=$(getprop ro.pxr.externalfunc)"
+        echo "saved_mode=$(saved_mode) saved_gate=$(saved_gate) injected=$MAPPED service_pid=${RUN_PID:-none} phase=$PHASE applied_mode=$APPLIED_MODE applied_gate=$APPLIED_GATE effective_eye_hz=$EFFECTIVE_EYE_HZ effective_mouth_hz=$EFFECTIVE_MOUTH_HZ mouthlink=$(saved_mouthlink) mouthlink_port=$(mouthlink_port) mouthlink_allow=$(mouthlink_allow) mouthled=$(saved_mouthled) externalfunc=$(getprop ro.pxr.externalfunc)"
+        led_state=$("$BIN" --read-file "$RUNTIME_DIR/mouthled" 2>/dev/null | tr '\n' ' ')
+        [ -n "$led_state" ] && echo "mouthled_last_camera_open: $led_state"
         [ -f "$BLOCKED" ] && echo "automatic_injection_blocked=$(cat "$BLOCKED")"
         if [ -f "$PLOG" ]; then
             echo "log_tail:"
@@ -442,6 +452,26 @@ case "$MODE" in
     ensure)
         inject_now
         exit $? ;;
+    mouthled-on|mouthled-off)
+        ML=off
+        [ "$MODE" = mouthled-on ] && ML=on
+        "$BIN" --save-mouthled "$ML" || die "cannot save mouth IR setting"
+        if [ "$ML" = off ]; then
+            # Brightness 0 is always safe and takes effect now; the payload keeps it at 0
+            # on every later camera open. Eye LED registers (0x49-0x4e) are not touched.
+            if [ -w "$LED_REG" ]; then
+                for r in 0x46 0x47 0x48; do printf '%s 0x00' "$r" > "$LED_REG" || log "mouth IR: register $r write failed"; done
+                printf '0x45 0x00' > "$LED_REG" || log "mouth IR: update register write failed"
+            else
+                log "mouth IR: LED node $LED_REG not writable; applies at the next camera open"
+            fi
+            log "mouth IR off"
+        else
+            # Never raise LED output from the shell: the stock brightness comes back from the
+            # service at the next camera open (take the headset off and put it on again).
+            log "mouth IR on: stock brightness returns at the next camera open (take the headset off and on)"
+        fi
+        exit 0 ;;
     off|dual|toggle|reload-processing|mouthlink-on|mouthlink-off|mouthlink-allow)
         if [ "$MODE" = mouthlink-allow ]; then
             [ -n "${2:-}" ] && [ "$2" != --force ] || die "usage: picoet.sh mouthlink-allow <private|any|IP[/bits],...> [--force]"
